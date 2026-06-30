@@ -1,0 +1,33 @@
+{
+  "name": "@app/agents",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@app/shared": "workspace:*",
+    "@app/db": "workspace:*",
+    "@app/llm": "workspace:*",
+    "@app/email": "workspace:*",
+    "@app/calendar": "workspace:*",
+    "@app/compliance": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2",
+    "vitest": "^2.1.2"
+  }
+}

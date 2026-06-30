@@ -1,0 +1,472 @@
+// Prisma schema for the agentic email automation system.
+// Enum string values MUST stay aligned with packages/shared/src/constants.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums (mirror @app/shared constants)
+// ---------------------------------------------------------------------------
+
+enum ProspectStatus {
+  new
+  researching
+  ready
+  sequenced
+  engaged
+  meeting_booked
+  unsubscribed
+  bounced
+  suppressed
+  closed
+}
+
+enum ResearchStatus {
+  researched
+  partial
+  insufficient
+  needs_review
+}
+
+enum DraftStatus {
+  draft
+  pending_review
+  approved
+  rejected
+  scheduled
+  sent
+  failed
+  cancelled
+}
+
+enum ApprovalType {
+  outreach_send
+  reply_send
+  schedule_meeting
+  escalation
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  expired
+  auto_approved
+}
+
+enum CalendarEventStatus {
+  proposed
+  tentative
+  confirmed
+  cancelled
+  failed
+}
+
+enum SuppressionReason {
+  unsubscribe
+  bounce
+  complaint
+  manual
+  global_block
+  competitor
+}
+
+enum AgentType {
+  research
+  outreach
+  compliance
+  inbound_classifier
+  scheduling_extractor
+  scheduling_reply
+}
+
+enum AgentRunStatus {
+  pending
+  running
+  succeeded
+  failed
+  invalid_output
+  escalated
+}
+
+enum EmailDirection {
+  outbound
+  inbound
+}
+
+enum ActorType {
+  system
+  agent
+  human
+  provider
+}
+
+// ---------------------------------------------------------------------------
+// Core entities
+// ---------------------------------------------------------------------------
+
+model Company {
+  id          String  @id @default(cuid())
+  name        String
+  domain      String? @unique
+  website     String?
+  industry    String?
+  size        String?
+  description String?
+  metadata    Json?
+
+  prospects Prospect[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+}
+
+model Prospect {
+  id        String         @id @default(cuid())
+  email     String         @unique
+  firstName String?
+  lastName  String?
+  title     String?
+  linkedin  String?
+  phone     String?
+  timezone  String?
+  status    ProspectStatus @default(new)
+  source    String?
+  metadata  Json?
+
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  researchResults ResearchResult[]
+  threads         EmailThread[]
+  sequences       OutreachSequence[]
+  drafts          DraftEmail[]
+  approvals       ApprovalItem[]
+  calendarEvents  CalendarEvent[]
+  agentRuns       AgentRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([companyId])
+}
+
+model ResearchResult {
+  id         String         @id @default(cuid())
+  prospectId String
+  prospect   Prospect       @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  status     ResearchStatus
+  summary    String
+  // Full structured ResearchOutput (see @app/shared ResearchOutputSchema).
+  output     Json
+  confidence Float
+  riskFlags  String[]
+  provider   String?
+  agentRunId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([prospectId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Email
+// ---------------------------------------------------------------------------
+
+model EmailThread {
+  id            String   @id @default(cuid())
+  prospectId    String
+  prospect      Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  subject       String?
+  // Provider-side thread id (e.g. Gmail threadId), if any.
+  providerThreadId String? @unique
+  lastMessageAt DateTime?
+
+  messages EmailMessage[]
+  drafts   DraftEmail[]
+  events   CalendarEvent[]
+  agentRuns AgentRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([prospectId])
+}
+
+model EmailMessage {
+  id        String         @id @default(cuid())
+  threadId  String
+  thread    EmailThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  direction EmailDirection
+  // Provider message id — unique to dedupe inbound webhooks/polls.
+  providerMessageId String? @unique
+  fromEmail String
+  toEmail   String
+  cc        String[]
+  subject   String?
+  bodyText  String?
+  bodyHtml  String?
+  headers   Json?
+  sentAt    DateTime?
+  receivedAt DateTime?
+
+  // If this outbound message originated from a draft.
+  draftId String?    @unique
+  draft   DraftEmail? @relation(fields: [draftId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([threadId])
+  @@index([direction])
+}
+
+// ---------------------------------------------------------------------------
+// Sequences
+// ---------------------------------------------------------------------------
+
+model OutreachSequence {
+  id         String   @id @default(cuid())
+  prospectId String
+  prospect   Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  name       String?
+  status     String   @default("active")
+  currentStep Int     @default(0)
+  maxSteps   Int      @default(5)
+
+  steps  SequenceStep[]
+  drafts DraftEmail[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([prospectId])
+}
+
+model SequenceStep {
+  id         String           @id @default(cuid())
+  sequenceId String
+  sequence   OutreachSequence @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  stepNumber Int
+  // Delay (hours) after the previous step before this step is eligible to send.
+  delayHours Int    @default(0)
+  channel    String @default("email")
+  template   String?
+  status     String @default("pending")
+  scheduledAt DateTime?
+  completedAt DateTime?
+
+  drafts DraftEmail[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sequenceId, stepNumber])
+  @@index([sequenceId])
+}
+
+// ---------------------------------------------------------------------------
+// Drafts & approvals
+// ---------------------------------------------------------------------------
+
+model DraftEmail {
+  id         String      @id @default(cuid())
+  // Stable idempotency key for the eventual send side-effect.
+  idempotencyKey String  @unique
+  prospectId String
+  prospect   Prospect    @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  threadId   String?
+  thread     EmailThread? @relation(fields: [threadId], references: [id])
+  sequenceId String?
+  sequence   OutreachSequence? @relation(fields: [sequenceId], references: [id])
+  sequenceStepId String?
+  sequenceStep   SequenceStep? @relation(fields: [sequenceStepId], references: [id])
+
+  direction EmailDirection @default(outbound)
+  fromEmail String
+  fromName  String?
+  toEmail   String
+  subject   String
+  bodyText  String
+  bodyHtml  String?
+
+  status           DraftStatus @default(draft)
+  // Mirror of the compliance review decision (pass/fail/needs_review).
+  complianceStatus String?
+  complianceFlags  Json?
+
+  agentRunId String?
+  scheduledAt DateTime?
+  sentAt      DateTime?
+
+  approvals ApprovalItem[]
+  message   EmailMessage?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([prospectId])
+  @@index([status])
+}
+
+model ApprovalItem {
+  id         String         @id @default(cuid())
+  type       ApprovalType
+  status     ApprovalStatus @default(pending)
+  prospectId String?
+  prospect   Prospect?      @relation(fields: [prospectId], references: [id])
+  draftId    String?
+  draft      DraftEmail?    @relation(fields: [draftId], references: [id])
+
+  // Snapshot of what is being approved + why a human is needed.
+  payload     Json
+  reason      String?
+  decidedBy   String?
+  decisionNote String?
+  decidedAt   DateTime?
+  expiresAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([type])
+}
+
+// ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+model CalendarEvent {
+  id         String              @id @default(cuid())
+  // Idempotency key for the create-event side-effect.
+  idempotencyKey String          @unique
+  // Provider-side event id once created (e.g. Google event id).
+  providerEventId String?        @unique
+  prospectId String?
+  prospect   Prospect?           @relation(fields: [prospectId], references: [id])
+  threadId   String?
+  thread     EmailThread?        @relation(fields: [threadId], references: [id])
+
+  title       String
+  description String?
+  status      CalendarEventStatus @default(proposed)
+  startTime   DateTime?
+  endTime     DateTime?
+  timezone    String
+  location    String?
+  meetingUrl  String?
+  // Array of { email, name?, responseStatus? }.
+  attendees   Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([prospectId])
+}
+
+// ---------------------------------------------------------------------------
+// Suppression
+// ---------------------------------------------------------------------------
+
+model SuppressionEntry {
+  id     String            @id @default(cuid())
+  // Either an exact email or a whole domain is suppressed. Both nullable;
+  // separate unique constraints prevent duplicate entries per key.
+  email  String?           @unique
+  domain String?           @unique
+  reason SuppressionReason
+  source String?
+  notes  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([reason])
+}
+
+// ---------------------------------------------------------------------------
+// Agent runs (observability for every LLM call)
+// ---------------------------------------------------------------------------
+
+model AgentRun {
+  id        String         @id @default(cuid())
+  agentType AgentType
+  status    AgentRunStatus @default(pending)
+  provider  String?
+  model     String?
+
+  prospectId String?
+  prospect   Prospect?    @relation(fields: [prospectId], references: [id])
+  threadId   String?
+  thread     EmailThread? @relation(fields: [threadId], references: [id])
+
+  inputPayload      Json
+  // Raw provider response with secrets/PII redacted — never the unredacted body.
+  rawResponseRedacted String?
+  parsedOutput      Json?
+  validationErrors  Json?
+  attempts          Int   @default(0)
+  latencyMs         Int   @default(0)
+  usage             Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agentType])
+  @@index([status])
+  @@index([prospectId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit & settings & idempotency
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String    @id @default(cuid())
+  action     String
+  actorType  ActorType
+  actorId    String?
+  entityType String
+  entityId   String
+  decision   String?
+  allowed    Boolean?
+  reason     String?
+  metadata   Json?
+  idempotencyKey String?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entityType])
+  @@index([entityType, entityId])
+}
+
+model SystemSetting {
+  key       String   @id @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model IdempotencyKey {
+  id         String   @id @default(cuid())
+  key        String   @unique
+  // Logical namespace for the action (e.g. "email.send", "calendar.create").
+  scope      String
+  resultJson Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([scope])
+}

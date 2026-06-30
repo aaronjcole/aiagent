@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@app/shared": ["packages/shared/src/index.ts"],
+      "@app/shared/*": ["packages/shared/src/*"],
+      "@app/db": ["packages/db/src/index.ts"],
+      "@app/db/*": ["packages/db/src/*"],
+      "@app/llm": ["packages/llm/src/index.ts"],
+      "@app/email": ["packages/email/src/index.ts"],
+      "@app/calendar": ["packages/calendar/src/index.ts"],
+      "@app/compliance": ["packages/compliance/src/index.ts"],
+      "@app/agents": ["packages/agents/src/index.ts"],
+      "@app/workflows": ["packages/workflows/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "dist", ".next", ".turbo"]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "@app/admin",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "dev": "next dev -p ${ADMIN_PORT:-3000}",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@app/shared": "workspace:*",
+    "@app/db": "workspace:*",
+    "next": "^14.2.13",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "~5.6.2",
+    "vitest": "^2.1.2"
+  }
+}
