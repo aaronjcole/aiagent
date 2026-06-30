@@ -84,12 +84,19 @@ async function withDeadLetter<T>(
   try {
     return await body();
   } catch (error) {
-    await recordTerminalFailureActivity({
-      workflowType,
-      workflowId: workflowInfo().workflowId,
-      input,
-      error: failureMessage(error),
-    });
+    // Recording the dead-letter must NEVER mask or replace the original workflow
+    // error. Wrap it in its own try/catch so a recording failure is swallowed
+    // (best-effort durability) while the ORIGINAL error is always rethrown.
+    try {
+      await recordTerminalFailureActivity({
+        workflowType,
+        workflowId: workflowInfo().workflowId,
+        input,
+        error: failureMessage(error),
+      });
+    } catch {
+      // Intentionally ignored: the original `error` below is the source of truth.
+    }
     throw error;
   }
 }

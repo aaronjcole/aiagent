@@ -1,8 +1,9 @@
 import { read } from '../../lib/api';
-import { asArray, fmtDate } from '../../lib/format';
+import { asArray } from '../../lib/format';
 import { ApiUnreachable } from '../../components/ApiError';
 import type { AuditLog } from '../../lib/types';
 import { AuditFilter } from './AuditFilter';
+import { AuditTable } from './AuditTable';
 
 /** Always render at request time so audit logs reflect live API data. */
 export const dynamic = 'force-dynamic';
@@ -39,6 +40,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
       <h2>Audit logs</h2>
 
       <div className="panel">
+        {/* Server-side filter: entityType + limit drive the API query. */}
         <AuditFilter entityType={entityType} limit={limit} />
       </div>
 
@@ -49,41 +51,8 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
       ) : logs.length === 0 ? (
         <p className="muted">No audit logs{entityType ? ` for entity type “${entityType}”` : ''}.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>When</th>
-              <th>Entity</th>
-              <th>Action</th>
-              <th>Actor</th>
-              <th>Allowed</th>
-              <th>Reason</th>
-            </tr>
-          </thead>
-          <tbody>
-            {logs.map((log) => (
-              <tr key={log.id}>
-                <td>{fmtDate(log.createdAt)}</td>
-                <td>
-                  {log.entityType ?? '—'}
-                  {log.entityId ? <div className="muted">{log.entityId}</div> : null}
-                </td>
-                <td>{log.action ?? '—'}</td>
-                <td>{log.actor ?? log.actorType ?? '—'}</td>
-                <td>
-                  {log.allowed === false ? (
-                    <span className="badge">blocked</span>
-                  ) : log.allowed === true ? (
-                    '✓'
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td>{log.reason ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        // Client-side finer filtering (prospect/thread/category) over the fetched rows.
+        <AuditTable logs={logs} />
       )}
     </div>
   );

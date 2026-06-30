@@ -20,7 +20,7 @@ import {
   DeadLetterStatus,
 } from '@app/shared';
 import type { Deps } from '../deps.js';
-import { toJson, writeAudit } from './shared.js';
+import { toJson } from './shared.js';
 
 /** Input to {@link recordTerminalFailure}: the failed workflow + its error. */
 export interface RecordTerminalFailureInput {
@@ -52,72 +52,183 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Redact a stack trace to a bounded, secret-free string. We keep only the stack
- * (which is class/file/line oriented) and cap its length; we never persist a raw
- * provider body. Returns null when no stack is available.
+ * Scrub secret-like substrings from a single line: API keys (`sk-`, `sk-ant-`),
+ * bearer tokens, and long opaque tokens. Replaces the secret with `[REDACTED]`
+ * so neither the message nor the stack persists a credential.
+ */
+function scrubSecrets(text: string): string {
+  return (
+    text
+      // Authorization: Bearer <token>  /  bearer <token>
+      .replace(/\bBearer\s+[A-Za-z0-9._\-+/=]+/gi, 'Bearer [REDACTED]')
+      // Anthropic / OpenAI style keys: sk-ant-..., sk-...
+      .replace(/\bsk-(?:ant-)?[A-Za-z0-9._-]{8,}/g, '[REDACTED]')
+      // Long opaque tokens (>= 24 chars of base64/hex-ish): redact conservatively.
+      .replace(/\b[A-Za-z0-9._\-+/=]{24,}\b/g, '[REDACTED]')
+  );
+}
+
+/**
+ * Redact an error MESSAGE: scrub secret-like substrings and cap its length. We
+ * never persist a raw provider body / credential.
+ */
+function redactMessage(message: string): string {
+  return scrubSecrets(message).slice(0, 2000);
+}
+
+/**
+ * Redact a stack trace to a bounded, secret-free string. We scrub secret-like
+ * substrings from EVERY line (not just truncate) and cap the total length; we
+ * never persist a raw provider body. Returns null when no stack is available.
  */
 function redactStack(error: unknown): string | null {
   if (error instanceof Error && typeof error.stack === 'string') {
-    return error.stack.slice(0, 2000);
+    const scrubbed = error.stack
+      .split('\n')
+      .map((line) => scrubSecrets(line))
+      .join('\n');
+    return scrubbed.slice(0, 2000);
   }
   return null;
 }
 
 /**
+ * Stable, deterministic dedupe key for a terminal failure. Derived from the
+ * workflowType + workflowId so a Temporal RETRY of the recording activity maps
+ * to the SAME key (and thus the same DeadLetter row). Falls back to the input
+ * hash when no workflowId is known, so distinct failures never collide.
+ */
+function deriveDedupeKey(input: RecordTerminalFailureInput): string {
+  if (input.workflowId) return `${input.workflowType}:${input.workflowId}`;
+  let inputHash: string;
+  try {
+    inputHash = JSON.stringify(input.input ?? null);
+  } catch {
+    inputHash = String(input.input);
+  }
+  return `${input.workflowType}:${inputHash.slice(0, 200)}`;
+}
+
+/** True when a thrown error is a Prisma unique-constraint (P2002) violation. */
+function isUniqueViolation(err: unknown): boolean {
+  if (err && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code;
+    if (code === 'P2002') return true;
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === 'string' && /unique/i.test(msg)) return true;
+  }
+  return false;
+}
+
+/**
  * Durably record a terminal workflow failure: AuditLog + ESCALATION ApprovalItem
- * + DeadLetter row. Idempotency is NOT required here (Temporal calls this once
- * per terminal failure), but the writes are append-only and safe to repeat.
+ * + DeadLetter row.
+ *
+ * IDEMPOTENT + TRANSACTIONAL. A stable `dedupeKey` (workflowType + workflowId)
+ * guards against a Temporal RETRY of this recording: if a DeadLetter with the
+ * key already exists, we return its ids WITHOUT creating duplicates. The three
+ * writes (DeadLetter + ApprovalItem + audit) happen in a single
+ * `prisma.$transaction` so a partial record can never be observed. A concurrent
+ * racing insert is caught via the unique constraint and resolved by re-reading.
  */
 export async function recordTerminalFailure(
   deps: Deps,
   input: RecordTerminalFailureInput,
 ): Promise<RecordTerminalFailureResult> {
-  const message = errorMessage(input.error);
+  const message = redactMessage(errorMessage(input.error));
   const stackRedacted = redactStack(input.error);
+  const dedupeKey = deriveDedupeKey(input);
 
-  const deadLetter = await deps.prisma.deadLetter.create({
-    data: {
-      workflowType: input.workflowType,
-      workflowId: input.workflowId ?? null,
-      input: toJson(input.input) as object,
-      error: message,
-      stackRedacted,
-      status: DeadLetterStatus.OPEN,
-    },
+  // Idempotency guard: a prior recording for this terminal failure already
+  // exists → reuse it (find the linked ESCALATION ApprovalItem from its payload).
+  const existing = await findExistingByDedupeKey(deps, dedupeKey);
+  if (existing) return existing;
+
+  try {
+    return await deps.prisma.$transaction(async (tx) => {
+      const deadLetter = await tx.deadLetter.create({
+        data: {
+          dedupeKey,
+          workflowType: input.workflowType,
+          workflowId: input.workflowId ?? null,
+          input: toJson(input.input) as object,
+          error: message,
+          stackRedacted,
+          status: DeadLetterStatus.OPEN,
+        },
+        select: { id: true },
+      });
+
+      const approval = await tx.approvalItem.create({
+        data: {
+          type: ApprovalType.ESCALATION,
+          status: ApprovalStatus.PENDING,
+          payload: toJson({
+            kind: 'workflow_terminal_failure',
+            workflowType: input.workflowType,
+            workflowId: input.workflowId ?? null,
+            deadLetterId: deadLetter.id,
+            dedupeKey,
+            error: message,
+          }) as object,
+          reason: `workflow ${input.workflowType} failed terminally: ${message}`,
+        },
+        select: { id: true },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          action: 'workflow.terminal_failure',
+          actorType: ActorType.SYSTEM,
+          actorId: null,
+          entityType: 'workflow',
+          entityId: input.workflowId ?? input.workflowType,
+          decision: 'failed',
+          allowed: false,
+          reason: message,
+          metadata: toJson({
+            workflowType: input.workflowType,
+            workflowId: input.workflowId ?? null,
+            deadLetterId: deadLetter.id,
+            approvalItemId: approval.id,
+            dedupeKey,
+          }),
+          idempotencyKey: dedupeKey,
+        },
+      });
+
+      return { deadLetterId: deadLetter.id, approvalItemId: approval.id };
+    });
+  } catch (err) {
+    // A concurrent recording won the race on the unique dedupeKey: re-read and
+    // return the winner's ids rather than surfacing a spurious failure.
+    if (isUniqueViolation(err)) {
+      const winner = await findExistingByDedupeKey(deps, dedupeKey);
+      if (winner) return winner;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Resolve an already-recorded terminal failure by its dedupe key. Returns the
+ * DeadLetter id + the linked ESCALATION ApprovalItem id, or null when none.
+ */
+async function findExistingByDedupeKey(
+  deps: Deps,
+  dedupeKey: string,
+): Promise<RecordTerminalFailureResult | null> {
+  const dl = await deps.prisma.deadLetter.findUnique({
+    where: { dedupeKey },
     select: { id: true },
   });
-
-  const approval = await deps.prisma.approvalItem.create({
-    data: {
-      type: ApprovalType.ESCALATION,
-      status: ApprovalStatus.PENDING,
-      payload: toJson({
-        kind: 'workflow_terminal_failure',
-        workflowType: input.workflowType,
-        workflowId: input.workflowId ?? null,
-        deadLetterId: deadLetter.id,
-        error: message,
-      }) as object,
-      reason: `workflow ${input.workflowType} failed terminally: ${message}`,
-    },
-    select: { id: true },
+  if (!dl) return null;
+  // The audit row carries approvalItemId in metadata; re-read it to return a
+  // complete result. Fall back to empty when (legacy) absent.
+  const audit = await deps.prisma.auditLog.findFirst({
+    where: { idempotencyKey: dedupeKey, action: 'workflow.terminal_failure' },
+    select: { metadata: true },
   });
-
-  await writeAudit(deps, {
-    action: 'workflow.terminal_failure',
-    actorType: ActorType.SYSTEM,
-    entityType: 'workflow',
-    entityId: input.workflowId ?? input.workflowType,
-    decision: 'failed',
-    allowed: false,
-    reason: message,
-    metadata: {
-      workflowType: input.workflowType,
-      workflowId: input.workflowId ?? null,
-      deadLetterId: deadLetter.id,
-      approvalItemId: approval.id,
-    },
-  });
-
-  return { deadLetterId: deadLetter.id, approvalItemId: approval.id };
+  const meta = (audit?.metadata ?? {}) as { approvalItemId?: string };
+  return { deadLetterId: dl.id, approvalItemId: meta.approvalItemId ?? '' };
 }

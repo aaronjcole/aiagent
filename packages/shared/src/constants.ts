@@ -146,3 +146,45 @@ export const DeadLetterStatus = {
 } as const;
 /** String-literal union of {@link DeadLetterStatus} values. */
 export type DeadLetterStatus = ValueOf<typeof DeadLetterStatus>;
+
+/**
+ * Controlled-autonomy mode for OUTBOUND/INBOUND email automation.
+ *
+ * Conservative ladder, lowest → highest autonomy:
+ *  - `DISABLED`: no automated email behavior at all.
+ *  - `DRAFT_ONLY`: agents may compose drafts; nothing leaves without a human.
+ *  - `APPROVAL_REQUIRED`: drafts created + queued for explicit human approval.
+ *  - `LIMITED_AUTO_SEND`: bounded autonomous sending, gated by every
+ *    deterministic policy check (caps, readiness, kill switches, etc.).
+ *
+ * The LLM NEVER selects this mode; it is read from `SystemSetting` by the
+ * deterministic policy layer.
+ */
+export const EmailAutonomyMode = {
+  DISABLED: 'disabled',
+  DRAFT_ONLY: 'draft_only',
+  APPROVAL_REQUIRED: 'approval_required',
+  LIMITED_AUTO_SEND: 'limited_auto_send',
+} as const;
+/** String-literal union of {@link EmailAutonomyMode} values. */
+export type EmailAutonomyMode = ValueOf<typeof EmailAutonomyMode>;
+
+/**
+ * Controlled-autonomy mode for CALENDAR automation.
+ *
+ * Conservative ladder, lowest → highest autonomy:
+ *  - `DISABLED`: no automated calendar behavior.
+ *  - `PROPOSE_TIMES_ONLY`: agents may propose slots; a human books.
+ *  - `AUTO_BOOK_CONFIRMED`: bounded autonomous booking of explicitly
+ *    confirmed slots, gated by every deterministic policy check.
+ *
+ * The LLM NEVER selects this mode; it is read from `SystemSetting` by the
+ * deterministic policy layer.
+ */
+export const CalendarAutonomyMode = {
+  DISABLED: 'disabled',
+  PROPOSE_TIMES_ONLY: 'propose_times_only',
+  AUTO_BOOK_CONFIRMED: 'auto_book_confirmed',
+} as const;
+/** String-literal union of {@link CalendarAutonomyMode} values. */
+export type CalendarAutonomyMode = ValueOf<typeof CalendarAutonomyMode>;

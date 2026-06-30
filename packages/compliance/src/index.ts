@@ -19,3 +19,7 @@ export * from './audit.js';
 export * from './gates.js';
 export * from './repos.js';
 export * from './fakes.js';
+export * from './settings.js';
+export * from './business-hours.js';
+export * from './unsubscribe-headers.js';
+export * from './policy.js';

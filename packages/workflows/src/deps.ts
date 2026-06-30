@@ -13,6 +13,12 @@ import { createEmailProvider, type EmailProvider } from '@app/email';
 import { createCalendarProvider, type CalendarProvider } from '@app/calendar';
 import type { PrismaClient } from '@app/db';
 import { createLogger, loadConfig, type Config, type Logger } from '@app/shared';
+import {
+  createSettingsReader,
+  createCapRepo,
+  type SettingsReader,
+  type CapRepo,
+} from '@app/compliance';
 import { createResearchProvider, type ResearchProvider } from './providers/research.js';
 
 /** A monotonic clock; injected so timestamps are deterministic in tests. */
@@ -32,6 +38,15 @@ export interface Deps {
   config: Config;
   logger: Logger;
   clock: Clock;
+  /**
+   * Deterministic controlled-autonomy settings reader (autonomy modes, caps,
+   * kill switches, readiness flags). Read once from `SystemSetting`; the policy
+   * layer consults it to decide whether an autonomous action is permitted. The
+   * LLM never reads or writes these.
+   */
+  settings: SettingsReader;
+  /** Rolling 24h cap counts for the controlled-autonomy policy layer. */
+  caps: CapRepo;
 }
 
 /** Options for {@link createDeps}. */
@@ -56,11 +71,17 @@ export async function createDeps(options: CreateDepsOptions = {}): Promise<Deps>
   // fake prisma) never construct a real client / load the query engine.
   const prisma = options.prisma ?? (await import('@app/db')).prisma;
 
+  // Load the autonomy settings snapshot once and build the policy-layer deps.
+  const settings = await createSettingsReader(prisma);
+  const caps = createCapRepo(prisma);
+
   return {
     config,
     logger,
     clock,
     prisma,
+    settings,
+    caps,
     llmClient: createLlmClient(config, logger),
     email: createEmailProvider(config, logger, { clock }),
     calendar: createCalendarProvider(config, logger),

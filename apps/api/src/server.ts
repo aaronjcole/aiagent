@@ -27,6 +27,8 @@ import { registerThreadRoutes } from './routes/threads.js';
 import { registerSuppressionRoutes } from './routes/suppression.js';
 import { registerAuditRoutes } from './routes/audit.js';
 import { registerSettingsRoutes } from './routes/settings.js';
+import { registerAutomationRoutes } from './routes/automation.js';
+import { registerUnsubscribeRoutes } from './routes/unsubscribe.js';
 
 export function buildServer(ctx: AppContext): FastifyInstance {
   // Pass the shared pino logger as a `FastifyBaseLogger` so Fastify does not
@@ -97,6 +99,8 @@ export function buildServer(ctx: AppContext): FastifyInstance {
   registerSuppressionRoutes(app, ctx);
   registerAuditRoutes(app, ctx);
   registerSettingsRoutes(app, ctx);
+  registerAutomationRoutes(app, ctx);
+  registerUnsubscribeRoutes(app, ctx);
 
   return app;
 }

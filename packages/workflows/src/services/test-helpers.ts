@@ -8,6 +8,14 @@ import { createLogger, loadConfig, newId, type Config } from '@app/shared';
 import { MockLlmProvider, LlmClient, type LlmProvider } from '@app/llm';
 import { MockEmailProvider } from '@app/email';
 import { MockCalendarProvider } from '@app/calendar';
+import {
+  FakeSettingsReader,
+  FakeCapRepo,
+  type SettingsReader,
+  type CapRepo,
+  type FakeCapCounts,
+} from '@app/compliance';
+import type { AutonomySettingValue, SETTING_KEYS } from '@app/shared';
 import { asPrisma, type Deps } from '../deps.js';
 import { MockResearchProvider } from '../providers/research.js';
 
@@ -52,6 +60,7 @@ export class FakePrisma {
   approvalItem = new Table<Row>();
   calendarEvent = new Table<Row>();
   suppressionEntry = new Table<Row>();
+  senderAccount = new Table<Row>();
   agentRun = new Table<Row>();
   auditLog = new Table<Row>();
   systemSetting = new Table<Row>();
@@ -59,7 +68,7 @@ export class FakePrisma {
 
   /** Expose Prisma-delegate-shaped objects. */
   get client(): Record<string, unknown> {
-    return {
+    const delegates = {
       prospect: this.delegate(this.prospect, 'prospect'),
       company: this.delegate(this.company, 'company'),
       researchResult: this.delegate(this.researchResult, 'research'),
@@ -70,10 +79,28 @@ export class FakePrisma {
       approvalItem: this.delegate(this.approvalItem, 'approval'),
       calendarEvent: this.delegate(this.calendarEvent, 'event'),
       suppressionEntry: this.delegate(this.suppressionEntry, 'sup'),
+      senderAccount: this.delegate(this.senderAccount, 'sender'),
       agentRun: this.delegate(this.agentRun, 'run'),
       auditLog: this.delegate(this.auditLog, 'audit'),
       systemSetting: this.delegate(this.systemSetting, 'setting'),
       deadLetter: this.delegate(this.deadLetter, 'dead'),
+    };
+    return {
+      ...delegates,
+      /**
+       * Minimal `$transaction` double. Supports the interactive (callback) form
+       * — the only form the services use — by invoking the callback with the
+       * same delegate set (the fakes are synchronous in-memory maps, so there is
+       * no real isolation/rollback to model). Also supports the array form.
+       */
+      $transaction: async (
+        arg: ((tx: Record<string, unknown>) => Promise<unknown>) | Promise<unknown>[],
+      ): Promise<unknown> => {
+        if (typeof arg === 'function') {
+          return arg(delegates);
+        }
+        return Promise.all(arg);
+      },
     };
   }
 
@@ -172,20 +199,55 @@ export interface MakeDepsOptions {
   config?: Partial<Config>;
   llmProvider?: LlmProvider;
   clockIso?: string;
+  /**
+   * Autonomy-setting overrides applied on top of the conservative catalog
+   * defaults (emailAutonomyMode=approval_required, calendarAutonomyMode=
+   * propose_times_only, all kill switches off, readiness NOT all-ready). Pass
+   * a ready-posture override map to exercise the autonomous paths.
+   */
+  settings?: Partial<{ [K in SETTING_KEYS]: AutonomySettingValue<K> }> | SettingsReader;
+  /** Preset cap counts for the policy layer (defaults to all-zero). */
+  caps?: FakeCapCounts | CapRepo;
 }
 
-/** Build a {@link Deps} backed by in-memory fakes + the deterministic mocks. */
+/** True when the argument is already a {@link SettingsReader} (not an overrides map). */
+function isSettingsReader(v: unknown): v is SettingsReader {
+  return typeof v === 'object' && v !== null && typeof (v as SettingsReader).emailAutonomyMode === 'function';
+}
+
+/** True when the argument is already a {@link CapRepo} (not a preset-counts map). */
+function isCapRepo(v: unknown): v is CapRepo {
+  return typeof v === 'object' && v !== null && typeof (v as CapRepo).countGlobalSentToday === 'function';
+}
+
+/**
+ * Build a {@link Deps} backed by in-memory fakes + the deterministic mocks.
+ * The injected {@link FakeSettingsReader}/{@link FakeCapRepo} default to the
+ * SAFEST posture (approval_required / propose_times_only / kill switches off /
+ * readiness not-all-ready), so by default the draft+approval flow stays the
+ * default path; tests opt into autonomy by overriding `settings`/`caps`.
+ */
 export function makeDeps(prisma: FakePrisma, options: MakeDepsOptions = {}): Deps {
   const baseConfig = loadConfig({});
   const config: Config = { ...baseConfig, ...options.config };
   const clockDate = new Date(options.clockIso ?? '2026-06-30T12:00:00.000Z');
   const clock = (): Date => clockDate;
   const provider = options.llmProvider ?? new MockLlmProvider();
+
+  const settings: SettingsReader = isSettingsReader(options.settings)
+    ? options.settings
+    : new FakeSettingsReader(options.settings ?? {});
+  const caps: CapRepo = isCapRepo(options.caps)
+    ? options.caps
+    : new FakeCapRepo(options.caps ?? {});
+
   return {
     config,
     logger: silentLogger,
     clock,
     prisma: asPrisma(prisma.client),
+    settings,
+    caps,
     llmClient: new LlmClient(provider, silentLogger),
     email: new MockEmailProvider({ logger: silentLogger, clock }),
     calendar: new MockCalendarProvider({}, silentLogger),

@@ -14,11 +14,13 @@
 import {
   ActorType,
   DraftStatus,
+  ProspectStatus,
   ValidationError,
   idempotencyKey,
   type ComplianceReview,
 } from '@app/shared';
 import {
+  buildUnsubscribeHeaders,
   createReplyHistoryRepo,
   createSendCountRepo,
   createSuppressionRepo,
@@ -197,6 +199,14 @@ export async function sendApprovedDraft(
   }
 
   // Cleared: safety gates pass + SENDING_ENABLED on + human approval.
+  // Attach RFC 8058 / List-Unsubscribe headers when configured (reusing the
+  // SPEC idempotency key the draft already carries — idempotent at the provider).
+  const headers: Record<string, string> = buildUnsubscribeHeaders({
+    settings: deps.settings,
+    config: { unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl },
+    recipient: (draftRow.toEmail as string).trim().toLowerCase(),
+  }) as Record<string, string>;
+
   const sendResult = await deps.email.sendMessage({
     to: [{ email: draftRow.toEmail as string }],
     from: {
@@ -206,11 +216,20 @@ export async function sendApprovedDraft(
     subject: draftRow.subject as string,
     body: draftRow.bodyText as string,
     idempotencyKey: sendKey,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
   });
 
   await deps.prisma.draftEmail.update({
     where: { id: draftId },
     data: { status: DraftStatus.SENT, sentAt: deps.clock() },
+  });
+
+  // CR fix: advance the prospect lifecycle status the SAME way the autonomous
+  // `outboundSequenceService` send path does (ProspectStatus.SEQUENCED), so a
+  // human-approved send and an autonomous send leave the prospect consistent.
+  await deps.prisma.prospect.update({
+    where: { id: prospectId },
+    data: { status: ProspectStatus.SEQUENCED },
   });
 
   await writeAudit(deps, {

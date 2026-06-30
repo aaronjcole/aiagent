@@ -185,6 +185,130 @@ Auto-send requires **both**:
 
 ---
 
+## Controlled autonomy
+
+The system ships in its safest posture: it drafts and queues for human approval,
+and never auto-sends or auto-books. **Controlled autonomy** is the opt-in,
+deterministically-gated path to bounded autonomous behavior. The LLM still only
+*recommends* — every autonomous action is decided by deterministic policy code
+(`@app/compliance`) reading `SystemSetting` rows, never by the model.
+
+### Two tracks — calendar before email
+
+Roll out autonomy in order, calendar first (lower blast radius), then email:
+
+1. **Calendar** — proposing meeting times is always allowed. Direct *booking* of
+   a confirmed slot is gated by `CalendarAutonomyMode` + caps + business hours.
+2. **Email** — autonomous *sending* is the higher-risk track. It additionally
+   requires every deliverability/compliance **readiness** flag to be confirmed.
+
+### Autonomy modes + safe defaults
+
+Two ladders live in `SystemSetting` (catalog: `packages/shared/src/autonomy.ts`).
+The LLM never selects them.
+
+| Mode setting | Ladder (low → high autonomy) | Safe default |
+|---|---|---|
+| `emailAutonomyMode` | `disabled` → `draft_only` → `approval_required` → `limited_auto_send` | `approval_required` |
+| `calendarAutonomyMode` | `disabled` → `propose_times_only` → `auto_book_confirmed` | `propose_times_only` |
+
+All caps/thresholds seed to conservative values, all kill switches seed **off**,
+and all readiness flags seed **false** — so a fresh deployment cannot auto-act.
+
+### Enabling direct scheduling (calendar)
+
+Two gates must agree:
+
+1. Env: `ENABLE_AUTO_SCHEDULING=true`, **and**
+2. SystemSetting: `calendarAutonomyMode=auto_book_confirmed`.
+
+Booking is then still bounded by `maxCalendarEventsPerDay`,
+`calendarConfidenceThreshold`, business hours, and the calendar kill switches.
+
+### Enabling direct sending (email) — do this deliberately
+
+All of the following must be true:
+
+1. Env: `ENABLE_AUTO_SEND=true` (and `SENDING_ENABLED=true` to send at all).
+2. SystemSetting: `emailAutonomyMode=limited_auto_send`.
+3. **Every** compliance-readiness flag set to `true`:
+   `spfDkimDmarcReady`, `physicalAddressConfigured`, `unsubscribeConfigured`,
+   `suppressionListActive`, `senderIdentityConfigured`, `replyToValid`,
+   `bounceHandlingConfigured`, `postmasterMonitoring`.
+
+Each autonomous send is still bounded by the caps, thresholds, business hours,
+and kill switches below.
+
+### Required env vars
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `ENABLE_AUTO_SCHEDULING` | env enabler for direct calendar booking | `false` |
+| `ENABLE_AUTO_SEND` | env enabler for autonomous email sending | `false` |
+| `SENDING_ENABLED` | master send kill switch (must be on to send at all) | `false` |
+| `DEFAULT_FROM_EMAIL` / `DEFAULT_FROM_NAME` | seeded sending identity (`SenderAccount`) | placeholders |
+| `UNSUBSCRIBE_BASE_URL` | base URL for the HTTPS unsubscribe endpoint | placeholder |
+
+### SystemSettings (autonomy catalog)
+
+Seeded idempotently by `pnpm seed`; editable at runtime via
+`PUT /settings/:key` (type-validated per key). Read via `GET /settings`.
+
+| Key | Type | Default |
+|---|---|---|
+| `emailAutonomyMode` | enum | `approval_required` |
+| `calendarAutonomyMode` | enum | `propose_times_only` |
+| `maxAutoSendsPerDayGlobal` | int ≥ 0 | `10` |
+| `maxAutoSendsPerSenderPerDay` | int ≥ 0 | `10` |
+| `maxAutoSendsPerDomainPerDay` | int ≥ 0 | `2` |
+| `maxAutoSendsPerProspectPerSequence` | int ≥ 0 | `1` |
+| `minMinutesBetweenAutoSendsPerSender` | int ≥ 0 | `10` |
+| `maxAutoRepliesPerThreadPerDay` | int ≥ 0 | `3` |
+| `maxCalendarEventsPerDay` | int ≥ 0 | `10` |
+| `researchConfidenceThreshold` | number 0..1 | `0.7` |
+| `complianceConfidenceThreshold` | number 0..1 | `0.7` |
+| `calendarConfidenceThreshold` | number 0..1 | `0.9` |
+| `businessHoursStart` / `businessHoursEnd` | int 0..23 | `9` / `17` |
+| `businessTimezone` | IANA tz string | `America/New_York` |
+| `globalPauseAllAutomation` | bool | `false` |
+| `pauseOutboundSending` | bool | `false` |
+| `pauseInboundReplies` | bool | `false` |
+| `pauseCalendarCreation` | bool | `false` |
+| `pauseSpecificSenderAccounts` | string[] (emails) | `[]` |
+| `pauseSpecificDomains` | string[] | `[]` |
+| `spfDkimDmarcReady` … `postmasterMonitoring` | bool (×8 readiness) | `false` |
+
+### Safety checklist (before flipping `limited_auto_send`)
+
+- **Caps** — start LOW: `maxAutoSendsPerDayGlobal`, per-sender, per-domain,
+  per-prospect, and the min interval between sends. Confirm via
+  `GET /automation/counts` (returns `{ globalSentToday, calendarEventsToday }`).
+- **Kill switches** — know how to hit them: `globalPauseAllAutomation` (hard
+  stop), `pauseOutboundSending`, `pauseInboundReplies`, `pauseCalendarCreation`,
+  and the per-sender / per-domain pause lists.
+- **Readiness** — all eight flags `true` and actually verified (not just toggled).
+- **Business hours** — `businessHoursStart`/`End` + a valid `businessTimezone`.
+- **Idempotency** — sends are deduped on `DraftEmail.idempotencyKey` /
+  `IdempotencyKey`; no double-send across retries.
+- **Suppression** — the HTTPS unsubscribe endpoint (`POST`/`GET /unsubscribe`)
+  deterministically adds a `SuppressionEntry` (reason `unsubscribe`) and audits
+  `unsubscribe.detected` + `suppression.added`. This backs `List-Unsubscribe-Post`.
+
+### Local / mock behavior
+
+With the default `mock` providers, **nothing real is sent or booked** — the mock
+email/calendar adapters record the action without contacting a provider, so you
+can exercise the full autonomy path (caps, gates, audit) locally with zero risk.
+
+> ⚠️ **Production:** before enabling `LIMITED_AUTO_SEND`, start with **very low
+> caps** and independently verify **SPF / DKIM / DMARC** and your **suppression
+> list** are correct. Misconfigured sending damages deliverability and can
+> violate CAN-SPAM. The **draft + human-approval flow remains the default**, and
+> **everything is reversible**: flip the env var or the `SystemSetting` back, or
+> hit a kill switch, to return to the safe posture immediately.
+
+---
+
 ## Environment variables
 
 Full annotated list lives in [`.env.example`](./.env.example) (placeholders
@@ -207,6 +331,8 @@ only — **never commit real values**). Everything is parsed through
 | `RESEARCH_PROVIDER` | `mock` \| `live` | `mock` |
 | `AUTO_SEND_ENABLED` | auto-approve sends | `false` |
 | `SENDING_ENABLED` | master send kill switch | `false` |
+| `ENABLE_AUTO_SEND` | controlled-autonomy email enabler (see [Controlled autonomy](#controlled-autonomy)) | `false` |
+| `ENABLE_AUTO_SCHEDULING` | controlled-autonomy calendar enabler | `false` |
 | `DAILY_SEND_CAP` / `PER_INBOX_DAILY_CAP` / `PER_DOMAIN_DAILY_CAP` | send caps | `200` / `50` / `10` |
 | `SEQUENCE_MAX_STEPS` | max steps per sequence | `5` |
 | `DEFAULT_FROM_EMAIL` / `DEFAULT_FROM_NAME` | sender identity | placeholder |

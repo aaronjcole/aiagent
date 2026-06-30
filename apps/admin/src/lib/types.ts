@@ -158,3 +158,34 @@ export interface OutreachSequence {
   name?: string | null;
   maxSteps?: number | null;
 }
+
+/** Email autonomy ladder (mirrors `@app/shared` `EmailAutonomyMode`). */
+export type EmailAutonomyMode =
+  | 'disabled'
+  | 'draft_only'
+  | 'approval_required'
+  | 'limited_auto_send';
+
+/** Calendar autonomy ladder (mirrors `@app/shared` `CalendarAutonomyMode`). */
+export type CalendarAutonomyMode = 'disabled' | 'propose_times_only' | 'auto_book_confirmed';
+
+/**
+ * Live automation counts from `GET /automation/counts`. All fields optional so
+ * the UI degrades gracefully if the endpoint/contract is incomplete.
+ */
+export interface AutomationCounts {
+  globalSentToday?: number;
+  calendarEventsToday?: number;
+}
+
+/**
+ * Draft fields relevant to the controlled-autonomy phase. Extends {@link DraftEmail}
+ * with the policy-eligibility fields the API may attach (`GET /drafts/:id`).
+ */
+export interface DraftPolicyInfo {
+  autoSendEligible?: boolean;
+  denialReasons?: string[];
+}
+
+/** A draft as returned by `GET /drafts/:id`, including optional policy info. */
+export type DraftWithPolicy = DraftEmail & DraftPolicyInfo;

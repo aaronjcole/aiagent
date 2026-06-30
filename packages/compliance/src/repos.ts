@@ -10,6 +10,7 @@ import type { PrismaClient } from '@app/db';
 import { DraftStatus, EmailDirection } from '@app/shared';
 import type {
   AddSuppressionInput,
+  CapRepo,
   ReplyHistoryRepo,
   SendCountRepo,
   SuppressionEntryLike,
@@ -128,6 +129,76 @@ export function createSendCountRepo(prisma: PrismaClient): SendCountRepo {
           direction: EmailDirection.OUTBOUND,
           status: DraftStatus.SENT,
         },
+      });
+    },
+  };
+}
+
+/**
+ * Controlled-autonomy cap counts, derived from `AuditLog` action rows over a
+ * rolling 24h window. Autonomous actions are recorded as allowed audit rows:
+ *  - `email.send`     (action) allowed=true  → counts as an autonomous send,
+ *  - `email.reply`    (action) allowed=true  → counts as an autonomous reply,
+ *  - `calendar.create`(action) allowed=true  → counts as a calendar creation.
+ * The `entityId`/`metadata` carry the sender, recipient domain, and threadId.
+ */
+export function createCapRepo(prisma: PrismaClient): CapRepo {
+  const SEND = 'email.send';
+  const REPLY = 'email.reply';
+  const CAL = 'calendar.create';
+
+  return {
+    async countGlobalSentToday(): Promise<number> {
+      return prisma.auditLog.count({
+        where: { action: SEND, allowed: true, createdAt: { gte: since24h() } },
+      });
+    },
+    async countSenderSentToday(senderEmail: string): Promise<number> {
+      return prisma.auditLog.count({
+        where: {
+          action: SEND,
+          allowed: true,
+          createdAt: { gte: since24h() },
+          metadata: { path: ['senderEmail'], equals: senderEmail.trim().toLowerCase() },
+        },
+      });
+    },
+    async countDomainSentToday(domain: string): Promise<number> {
+      return prisma.auditLog.count({
+        where: {
+          action: SEND,
+          allowed: true,
+          createdAt: { gte: since24h() },
+          metadata: { path: ['recipientDomain'], equals: domain.trim().toLowerCase() },
+        },
+      });
+    },
+    async lastSenderSendAt(senderEmail: string): Promise<Date | null> {
+      const row = await prisma.auditLog.findFirst({
+        where: {
+          action: SEND,
+          allowed: true,
+          metadata: { path: ['senderEmail'], equals: senderEmail.trim().toLowerCase() },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
+      return row?.createdAt ?? null;
+    },
+    async countThreadAutoRepliesToday(threadId: string): Promise<number> {
+      return prisma.auditLog.count({
+        where: {
+          action: REPLY,
+          allowed: true,
+          createdAt: { gte: since24h() },
+          entityType: 'EmailThread',
+          entityId: threadId,
+        },
+      });
+    },
+    async countCalendarEventsToday(): Promise<number> {
+      return prisma.auditLog.count({
+        where: { action: CAL, allowed: true, createdAt: { gte: since24h() } },
       });
     },
   };

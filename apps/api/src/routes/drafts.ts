@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { DraftStatus } from '@app/db';
 import type { AppContext } from '../context.js';
-import { getDraft, listDrafts } from '../services.js';
+import { getDraft, getDraftWithEligibility, listDrafts } from '../services.js';
 import { startSendApprovedDraft } from '../start-workflows.js';
 
 // Only accept a single valid DraftStatus (kept in sync with the Prisma enum);
@@ -19,10 +19,12 @@ export function registerDraftRoutes(app: FastifyInstance, ctx: AppContext): void
     return listDrafts(ctx.prisma, status);
   });
 
-  // GET /drafts/:id — fetch one draft by id (404 if missing).
+  // GET /drafts/:id — fetch one draft by id (404 if missing). Augments the row
+  // with `autoSendEligible` + `denialReasons` surfaced from the outbound
+  // workflow's stored ApprovalItem payload / the draft's complianceFlags.
   app.get('/drafts/:id', async (req) => {
     const { id } = req.params as { id: string };
-    return getDraft(ctx.prisma, id);
+    return getDraftWithEligibility(ctx.prisma, id);
   });
 
   // Trigger the human-in-the-loop SEND of an APPROVED draft. The send is still

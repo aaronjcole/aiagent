@@ -16,6 +16,7 @@ import {
   ApprovalStatus,
   ApprovalType,
   DraftStatus,
+  EmailAutonomyMode,
   EscalationError,
   ProspectStatus,
   ResearchStatus,
@@ -25,6 +26,8 @@ import {
 } from '@app/shared';
 import { draftOutreach, reviewCompliance, type SenderProfile } from '@app/agents';
 import {
+  buildUnsubscribeHeaders,
+  canSendNow,
   checkEligibility,
   checkSuppression,
   createReplyHistoryRepo,
@@ -32,6 +35,8 @@ import {
   createSuppressionRepo,
   ensureFooter,
   runOutboundGates,
+  type AutoSendInput,
+  type EmailPolicyDeps,
   type ReplyHistorySnapshot,
 } from '@app/compliance';
 import type { Deps } from '../deps.js';
@@ -292,8 +297,31 @@ export async function outboundSequenceService(
     });
   }
 
-  // --- Build + persist the DraftEmail with a stable idempotency key ---
-  const draftKey = idempotencyKey([prospectId, sequenceId, String(stepNumber)]);
+  // --- Resolve the SenderAccount (controlled-autonomy sending identity) ---
+  // Look up by the configured from-email. When no row exists, the from-email
+  // itself is the sender identity; `senderActive` then reflects the resolved
+  // account's `active` flag (defaulting to active when no row constrains it).
+  const fromEmail = deps.config.defaultFromEmail;
+  const senderAccount = await deps.prisma.senderAccount.findUnique({
+    where: { email: fromEmail.trim().toLowerCase() },
+    select: { id: true, active: true },
+  });
+  const senderAccountId = (senderAccount?.id as string | undefined) ?? undefined;
+  const senderActive = senderAccount ? senderAccount.active !== false : true;
+  // The send/draft idempotency identity: the from-email when no row exists.
+  const senderIdentity = senderAccountId ?? fromEmail.trim().toLowerCase();
+  const normalizedRecipient = (prospect.email ?? '').trim().toLowerCase();
+
+  // --- Build + persist the DraftEmail with the SPEC idempotency key ---
+  // key = idempotencyKey([prospect_id, sequence_id, sequence_step_id,
+  //                        sender_account_id, normalized_recipient_email])
+  const draftKey = idempotencyKey([
+    prospectId,
+    sequenceId,
+    String(stepNumber),
+    senderIdentity,
+    normalizedRecipient,
+  ]);
   const complianceFlags = {
     decision: complianceReview.decision,
     issues: complianceReview.issues,
@@ -301,18 +329,26 @@ export async function outboundSequenceService(
     gateDecisions: gateResult.decisions,
   };
 
+  const mode = deps.settings.emailAutonomyMode();
+
   const draftRow = await deps.prisma.draftEmail.upsert({
     where: { idempotencyKey: draftKey },
     create: {
       idempotencyKey: draftKey,
       prospectId,
       sequenceId,
-      fromEmail: deps.config.defaultFromEmail,
+      ...(senderAccountId ? { senderAccountId } : {}),
+      fromEmail,
       fromName: deps.config.defaultFromName,
       toEmail: prospect.email,
       subject: draft.subject,
       bodyText: bodyWithFooter,
-      status: gateResult.canAutoSend ? DraftStatus.APPROVED : DraftStatus.PENDING_REVIEW,
+      // Pre-mark APPROVED only when the legacy gate AND the autonomy mode both
+      // clear auto-send; otherwise the conservative PENDING_REVIEW default holds.
+      status:
+        gateResult.canAutoSend && mode === EmailAutonomyMode.LIMITED_AUTO_SEND
+          ? DraftStatus.APPROVED
+          : DraftStatus.PENDING_REVIEW,
       complianceStatus: complianceReview.decision,
       complianceFlags: toJson(complianceFlags) as object,
       agentRunId: draftAgentRun.id,
@@ -322,6 +358,7 @@ export async function outboundSequenceService(
       bodyText: bodyWithFooter,
       complianceStatus: complianceReview.decision,
       complianceFlags: toJson(complianceFlags) as object,
+      ...(senderAccountId ? { senderAccountId } : {}),
     },
   });
 
@@ -332,29 +369,276 @@ export async function outboundSequenceService(
     return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
   }
 
-  // --- Auto-send vs. approval ---
-  // Defense-in-depth: even though `canAutoSend` already accounts for the master
-  // kill switch, re-check `config.sendingEnabled` at the actual send site so a
-  // safety-critical action can never fire while the switch is off.
-  if (gateResult.canAutoSend && deps.config.sendingEnabled) {
+  // --- Branch on the deterministic email autonomy mode ---
+  //  DISABLED / DRAFT_ONLY      → draft only, NEVER queue a send/approval-send
+  //  APPROVAL_REQUIRED (default)→ draft + human-approval ApprovalItem
+  //  LIMITED_AUTO_SEND          → policy-gated auto-send via `canSendNow`,
+  //                               falling back to an ApprovalItem on deny.
+  if (mode === EmailAutonomyMode.LIMITED_AUTO_SEND) {
+    return autoSendBranch(deps, {
+      prospectId,
+      sequenceId,
+      stepNumber,
+      draftRow,
+      draft,
+      bodyWithFooter,
+      complianceReview,
+      research,
+      gateResult,
+      fromEmail,
+      senderActive,
+      senderAccountId,
+      normalizedRecipient,
+      draftKey,
+      replyHistory,
+      suppressionResult,
+    });
+  }
+
+  if (mode === EmailAutonomyMode.DISABLED || mode === EmailAutonomyMode.DRAFT_ONLY) {
+    // Draft-only: the DraftEmail exists; we never auto-send and never queue a
+    // human-approval SEND item. This is strictly less autonomous than the
+    // default approval path.
+    await writeAudit(deps, {
+      action: 'draft.created',
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'draft_only',
+      allowed: false,
+      reason: `email autonomy mode is ${mode}; draft only, no send/approval`,
+      idempotencyKey: draftKey,
+      metadata: { sequenceId, stepNumber, mode },
+    });
+    return { status: 'pending_approval', prospectId, sequenceId, draftId: draftRow.id };
+  }
+
+  // --- APPROVAL_REQUIRED (default + fallback): human-review approval item ---
+  return approvalFallback(deps, {
+    prospectId,
+    sequenceId,
+    stepNumber,
+    draftRow,
+    draft,
+    bodyWithFooter,
+    complianceReview,
+    gateResult,
+    draftKey,
+    reasons: undefined,
+  });
+}
+
+/**
+ * LIMITED_AUTO_SEND branch: build the `AutoSendInput`, audit `policy.evaluated`,
+ * consult `canSendNow` (the deterministic policy layer), and either send (with
+ * RFC 8058 unsubscribe headers + the SPEC idempotency key) or fall back to a
+ * human-approval ApprovalItem carrying the denial reasons.
+ */
+async function autoSendBranch(
+  deps: Deps,
+  args: {
+    prospectId: string;
+    sequenceId: string;
+    stepNumber: number;
+    draftRow: { id: string; status: unknown };
+    draft: { subject: string };
+    bodyWithFooter: string;
+    complianceReview: ComplianceReview;
+    research: { status?: unknown; confidence?: unknown } | null;
+    gateResult: { allowed?: boolean; canAutoSend?: boolean };
+    fromEmail: string;
+    senderActive: boolean;
+    senderAccountId?: string;
+    normalizedRecipient: string;
+    draftKey: string;
+    replyHistory: ReplyHistorySnapshot;
+    suppressionResult: { suppressed: boolean; matchedOn?: 'email' | 'domain' };
+  },
+): Promise<OutboundSequenceResult> {
+  const {
+    prospectId,
+    sequenceId,
+    stepNumber,
+    draftRow,
+    draft,
+    bodyWithFooter,
+    complianceReview,
+    research,
+    fromEmail,
+    senderActive,
+    draftKey,
+    replyHistory,
+    suppressionResult,
+  } = args;
+
+  const policyDeps: EmailPolicyDeps = {
+    settings: deps.settings,
+    caps: deps.caps,
+    config: { ENABLE_AUTO_SEND: deps.config.enableAutoSend },
+    now: deps.clock(),
+  };
+
+  const researchStatus = String(research?.status ?? 'missing');
+  const researchConfidence =
+    typeof research?.confidence === 'number' ? (research.confidence as number) : 0;
+
+  const policyInput: AutoSendInput = {
+    senderEmail: fromEmail,
+    senderActive,
+    recipientEmail: args.normalizedRecipient,
+    prospectExists: true,
+    emailSuppressed: suppressionResult.suppressed && suppressionResult.matchedOn === 'email',
+    domainSuppressed: suppressionResult.suppressed && suppressionResult.matchedOn === 'domain',
+    unsubscribed: replyHistory.unsubscribed,
+    negativeReply: replyHistory.negativeReply,
+    threadHasSensitiveFlag: false,
+    researchStatus,
+    researchConfidence,
+    complianceReview: {
+      decision: complianceReview.decision,
+      confidence: complianceReview.confidence,
+    },
+    footerPresent: true,
+    subject: draft.subject,
+    unsupportedClaims: complianceReview.hasUnsupportedClaims ? ['compliance review flagged unsupported claims'] : [],
+    prospectId,
+    sequenceId,
+    prospectSequenceSends: 0,
+    sendAtIso: deps.clock().toISOString(),
+  };
+
+  // Audit the evaluation BEFORE deciding.
+  await writeAudit(deps, {
+    action: 'policy.evaluated',
+    actorType: ActorType.SYSTEM,
+    entityType: 'draft_email',
+    entityId: draftRow.id,
+    decision: 'auto_send',
+    reason: 'evaluating autonomous send policy',
+    idempotencyKey: draftKey,
+    metadata: { sequenceId, stepNumber, mode: EmailAutonomyMode.LIMITED_AUTO_SEND },
+  });
+
+  const decision = await canSendNow(policyInput, policyDeps);
+
+  if (!decision.allow) {
+    // Distinguish a pause/kill-switch denial so it is auditable as such.
+    const paused = decision.reasons.some((r) => r.toLowerCase().includes('kill switch'));
+    await writeAudit(deps, {
+      action: paused ? 'killswitch.triggered' : 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'denied',
+      allowed: false,
+      reason: decision.reasons.join('; '),
+      idempotencyKey: draftKey,
+      metadata: { reasons: decision.reasons, sequenceId, stepNumber },
+    });
+    if (paused) {
+      await writeAudit(deps, {
+        action: 'automation.paused',
+        actorType: ActorType.SYSTEM,
+        entityType: 'draft_email',
+        entityId: draftRow.id,
+        decision: 'paused',
+        allowed: false,
+        reason: decision.reasons.join('; '),
+        idempotencyKey: draftKey,
+        metadata: { reasons: decision.reasons },
+      });
+    }
+    // Safe fallback to the human-approval flow, recording the denial reasons +
+    // auto-send-eligibility=false on the ApprovalItem payload.
+    return approvalFallback(deps, {
+      prospectId,
+      sequenceId,
+      stepNumber,
+      draftRow,
+      draft,
+      bodyWithFooter,
+      complianceReview,
+      gateResult: args.gateResult,
+      draftKey,
+      reasons: decision.reasons,
+    });
+  }
+
+  await writeAudit(deps, {
+    action: 'policy.allowed',
+    actorType: ActorType.SYSTEM,
+    entityType: 'draft_email',
+    entityId: draftRow.id,
+    decision: 'allowed',
+    allowed: true,
+    reason: 'all autonomous-send policy gates passed',
+    idempotencyKey: draftKey,
+    metadata: { sequenceId, stepNumber },
+  });
+
+  // Idempotency short-circuit: the draft already shows SENT (a prior run sent
+  // it). Return the existing result without a second send.
+  const fresh = await deps.prisma.draftEmail.findUnique({
+    where: { idempotencyKey: draftKey },
+    select: { id: true, status: true },
+  });
+  if (fresh?.status === DraftStatus.SENT) {
+    return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
+  }
+
+  await writeAudit(deps, {
+    action: 'email.send.attempted',
+    actorType: ActorType.SYSTEM,
+    entityType: 'draft_email',
+    entityId: draftRow.id,
+    decision: 'attempting',
+    idempotencyKey: draftKey,
+    metadata: { sequenceId, stepNumber },
+  });
+
+  const headers: Record<string, string> = buildUnsubscribeHeaders({
+    settings: deps.settings,
+    config: { unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl },
+    recipient: args.normalizedRecipient,
+  }) as Record<string, string>;
+
+  try {
     const sendResult = await deps.email.sendMessage({
-      to: [{ email: prospect.email }],
-      from: { email: deps.config.defaultFromEmail, name: deps.config.defaultFromName },
+      to: [{ email: args.normalizedRecipient }],
+      from: { email: fromEmail, name: deps.config.defaultFromName },
       subject: draft.subject,
       body: bodyWithFooter,
       idempotencyKey: draftKey,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     });
 
+    // Mirror the legacy auto-send path: mark SENT + advance prospect status.
     await deps.prisma.draftEmail.update({
       where: { id: draftRow.id },
       data: { status: DraftStatus.SENT, sentAt: deps.clock() },
     });
-
     await deps.prisma.prospect.update({
       where: { id: prospectId },
       data: { status: ProspectStatus.SEQUENCED },
     });
 
+    await writeAudit(deps, {
+      action: 'email.send.succeeded',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'sent',
+      allowed: true,
+      reason: 'autonomous send policy allowed; sent',
+      idempotencyKey: draftKey,
+      metadata: {
+        providerMessageId: sendResult.providerMessageId,
+        providerThreadId: sendResult.providerThreadId,
+        sequenceId,
+        stepNumber,
+        senderEmail: fromEmail.trim().toLowerCase(),
+      },
+    });
+    // Also record the canonical `email.send` action the CapRepo counts against.
     await writeAudit(deps, {
       action: 'email.send',
       actorType: ActorType.SYSTEM,
@@ -362,22 +646,69 @@ export async function outboundSequenceService(
       entityId: draftRow.id,
       decision: 'sent',
       allowed: true,
-      reason: 'all gates passed; auto-send enabled',
+      reason: 'autonomous send',
       idempotencyKey: draftKey,
       metadata: {
-        providerMessageId: sendResult.providerMessageId,
-        providerThreadId: sendResult.providerThreadId,
+        senderEmail: fromEmail.trim().toLowerCase(),
+        recipientDomain: args.normalizedRecipient.split('@')[1] ?? null,
         sequenceId,
         stepNumber,
       },
     });
 
     return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
+  } catch (err) {
+    // Provider error → audit the failure and fall back to a human-approval item.
+    await writeAudit(deps, {
+      action: 'email.send.failed',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'failed',
+      allowed: false,
+      reason: err instanceof Error ? err.message : String(err),
+      idempotencyKey: draftKey,
+      metadata: { sequenceId, stepNumber },
+    });
+    return approvalFallback(deps, {
+      prospectId,
+      sequenceId,
+      stepNumber,
+      draftRow,
+      draft,
+      bodyWithFooter,
+      complianceReview,
+      gateResult: args.gateResult,
+      draftKey,
+      reasons: ['provider send failed; human review required'],
+    });
   }
+}
 
-  // Default path: surface a human-review approval item and wait. Reuse an
-  // existing PENDING OUTREACH_SEND item for this draft if one already exists
-  // (e.g. a workflow rerun) so we never queue duplicate review entries.
+/**
+ * Create (or reuse) the human-review OUTREACH_SEND ApprovalItem — the DEFAULT
+ * path and the safe fallback for every other branch. When `reasons` is present
+ * (a policy denial / send failure) it is recorded with auto-send-eligibility =
+ * false on the payload, and a `human_approval.fallback.created` audit is added.
+ */
+async function approvalFallback(
+  deps: Deps,
+  args: {
+    prospectId: string;
+    sequenceId: string;
+    stepNumber: number;
+    draftRow: { id: string };
+    draft: { subject: string };
+    bodyWithFooter: string;
+    complianceReview: ComplianceReview;
+    gateResult: { allowed?: boolean };
+    draftKey: string;
+    reasons?: string[];
+  },
+): Promise<OutboundSequenceResult> {
+  const { prospectId, sequenceId, stepNumber, draftRow, draft, bodyWithFooter, complianceReview, draftKey, reasons } = args;
+  const gateAllowed = args.gateResult.allowed ?? true;
+
   const existingApproval = await deps.prisma.approvalItem.findFirst({
     where: {
       draftId: draftRow.id,
@@ -398,11 +729,14 @@ export async function outboundSequenceService(
           subject: draft.subject,
           body: bodyWithFooter,
           complianceDecision: complianceReview.decision,
-          gateDecisions: gateResult.decisions,
+          autoSendEligible: false,
+          ...(reasons ? { denialReasons: reasons } : {}),
         }) as object,
-        reason: gateResult.allowed
-          ? 'auto-send disabled; human approval required'
-          : 'blocked by a hard gate; human review required',
+        reason: reasons
+          ? `autonomous send denied: ${reasons.join('; ')}`
+          : gateAllowed
+            ? 'auto-send disabled; human approval required'
+            : 'blocked by a hard gate; human review required',
       },
       select: { id: true },
     }));
@@ -411,14 +745,30 @@ export async function outboundSequenceService(
     action: 'draft.created',
     entityType: 'draft_email',
     entityId: draftRow.id,
-    decision: gateResult.allowed ? 'pending_approval' : 'blocked',
+    decision: reasons ? 'fallback' : gateAllowed ? 'pending_approval' : 'blocked',
     allowed: false,
-    reason: gateResult.allowed
-      ? 'requires human approval'
-      : 'blocked by a hard gate',
+    reason: reasons
+      ? 'autonomous send denied; human approval required'
+      : gateAllowed
+        ? 'requires human approval'
+        : 'blocked by a hard gate',
     idempotencyKey: draftKey,
     metadata: { approvalItemId: approval.id, sequenceId, stepNumber },
   });
+
+  if (reasons) {
+    await writeAudit(deps, {
+      action: 'human_approval.fallback.created',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'fallback',
+      allowed: false,
+      reason: reasons.join('; '),
+      idempotencyKey: draftKey,
+      metadata: { approvalItemId: approval.id, sequenceId, stepNumber, reasons },
+    });
+  }
 
   return {
     status: 'pending_approval',

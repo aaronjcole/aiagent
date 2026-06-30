@@ -125,6 +125,15 @@ export class MockEmailProvider implements EmailProvider {
     return created;
   }
 
+  /**
+   * Return a recorded message by its provider id, or undefined. Exposed so
+   * tests can assert recorded fields (e.g. `headers`) on a sent message.
+   */
+  getRecordedMessage(providerMessageId: string): EmailMessageDTO | undefined {
+    const m = this.messages.get(providerMessageId);
+    return m ? { ...m } : undefined;
+  }
+
   async getThread(threadId: string): Promise<EmailThreadDTO> {
     const thread = this.threads.get(threadId);
     if (!thread) {
@@ -200,6 +209,7 @@ export class MockEmailProvider implements EmailProvider {
       threadId,
       direction: EmailDirection.OUTBOUND,
       idempotencyKey: input.idempotencyKey,
+      headers: input.headers,
     });
   }
 
@@ -223,6 +233,7 @@ export class MockEmailProvider implements EmailProvider {
       threadId: input.threadId,
       direction: EmailDirection.OUTBOUND,
       idempotencyKey: input.idempotencyKey,
+      headers: input.headers,
     });
   }
 
@@ -235,6 +246,7 @@ export class MockEmailProvider implements EmailProvider {
     threadId?: string;
     direction: EmailDirection;
     idempotencyKey: string;
+    headers?: Record<string, string>;
   }): SendResult {
     const sentAt = this.nowIso();
     const providerMessageId = newId('msg');
@@ -256,6 +268,7 @@ export class MockEmailProvider implements EmailProvider {
       body: args.body,
       snippet: snippetOf(args.body),
       receivedAt: sentAt,
+      ...(args.headers ? { headers: args.headers } : {}),
     };
     thread.messages.push(message);
     this.messages.set(providerMessageId, message);

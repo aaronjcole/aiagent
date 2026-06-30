@@ -1,7 +1,9 @@
 /**
  * DB seed — idempotent. Creates a demo Company, a "Default Outbound" sequence
  * with steps, default SystemSettings (auto_send_enabled=false + caps mirrored
- * from env defaults), and a couple of demo prospects. Safe to re-run.
+ * from env defaults + the controlled-autonomy AUTONOMY_SETTINGS catalog at its
+ * conservative defaults), a default SenderAccount, and a couple of demo
+ * prospects. Safe to re-run.
  *
  * Invoke with `pnpm --filter @app/api run seed`. Requires DATABASE_URL.
  *
@@ -10,7 +12,7 @@
 
 import 'dotenv/config';
 import { prisma, type Prisma } from '@app/db';
-import { ProspectStatus, loadConfig } from '@app/shared';
+import { ProspectStatus, loadConfig, AUTONOMY_SETTINGS } from '@app/shared';
 
 const DEMO_DOMAIN = 'acme.example.com';
 const SEQUENCE_NAME = 'Default Outbound';
@@ -113,6 +115,7 @@ async function main(): Promise<void> {
   }
 
   // --- Default SystemSettings (upsert by key) ---
+  // Legacy/existing toggles + caps mirrored from env defaults...
   const settings: { key: string; value: Prisma.InputJsonValue }[] = [
     { key: 'auto_send_enabled', value: false },
     { key: 'sending_enabled', value: false },
@@ -121,6 +124,12 @@ async function main(): Promise<void> {
     { key: 'per_domain_daily_cap', value: config.perDomainDailyCap },
     { key: 'sequence_max_steps', value: config.sequenceMaxSteps },
   ];
+  // ...PLUS the controlled-autonomy catalog with its conservative defaults
+  // (emailAutonomyMode=approval_required, calendarAutonomyMode=propose_times_only,
+  // caps/thresholds/business-hours, kill switches off, readiness flags false).
+  for (const [key, value] of Object.entries(AUTONOMY_SETTINGS)) {
+    settings.push({ key, value: value as Prisma.InputJsonValue });
+  }
   for (const setting of settings) {
     await prisma.systemSetting.upsert({
       where: { key: setting.key },
@@ -129,10 +138,25 @@ async function main(): Promise<void> {
     });
   }
 
+  // --- Default SenderAccount (upsert by unique email) ---
+  // The sending identity controlled-autonomy auto-send uses; active by default.
+  const senderAccount = await prisma.senderAccount.upsert({
+    where: { email: config.defaultFromEmail },
+    create: {
+      email: config.defaultFromEmail,
+      name: config.defaultFromName,
+      active: true,
+    },
+    update: {},
+  });
+
   // --- Summary ---
   console.log('\n=== Seed complete ===');
   console.log(`Company:    ${company.name} (${company.id}) domain=${company.domain}`);
   console.log(`Sequence:   ${sequence.name} (${sequence.id}) steps=${steps.length}`);
+  console.log(
+    `Sender:     ${senderAccount.name} <${senderAccount.email}> (${senderAccount.id}) active=${senderAccount.active}`,
+  );
   console.log('Prospects:');
   for (const p of prospects) {
     console.log(`  - ${p.email} (${p.id}) status=${p.status}`);

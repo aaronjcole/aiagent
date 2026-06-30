@@ -19,7 +19,7 @@ import {
   SuppressionReason,
 } from '@app/shared';
 import type { Prisma, PrismaClient } from '@app/db';
-import { addSuppression, createSuppressionRepo } from '@app/compliance';
+import { addSuppression, createSuppressionRepo, createCapRepo } from '@app/compliance';
 
 /** JSON-safe coercion for AuditLog.metadata (drops undefined/functions). */
 function toJson(value: unknown): Prisma.InputJsonValue {
@@ -179,6 +179,61 @@ export async function getDraft(prisma: PrismaClient, id: string) {
   const row = await prisma.draftEmail.findUnique({ where: { id } });
   if (!row) throw new NotFoundError(`draft not found: ${id}`, { id });
   return row;
+}
+
+/** Coerce an unknown JSON value into a string[] (drops non-strings). */
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string');
+}
+
+/**
+ * Extract `{ autoSendEligible, denialReasons }` from a draft + its approval
+ * items. The outbound workflow stores the autonomous-send verdict on the
+ * ApprovalItem `payload` (newest item wins) and/or the draft's `complianceFlags`.
+ * Conservative default: not eligible, no reasons, when nothing was recorded.
+ */
+function extractEligibility(
+  approvals: { payload: unknown }[],
+  complianceFlags: unknown,
+): { autoSendEligible: boolean; denialReasons: string[] } {
+  // Prefer the most recent ApprovalItem payload (approvals are ordered desc).
+  const payload = approvals[0]?.payload;
+  const fromPayload =
+    payload && typeof payload === 'object'
+      ? (payload as Record<string, unknown>)
+      : undefined;
+  const fromFlags =
+    complianceFlags && typeof complianceFlags === 'object'
+      ? (complianceFlags as Record<string, unknown>)
+      : undefined;
+
+  const eligibleRaw = fromPayload?.autoSendEligible ?? fromFlags?.autoSendEligible;
+  const reasonsRaw = fromPayload?.denialReasons ?? fromFlags?.denialReasons;
+
+  return {
+    autoSendEligible: eligibleRaw === true,
+    denialReasons: asStringArray(reasonsRaw),
+  };
+}
+
+/**
+ * Fetch one draft (404 if missing) augmented with the autonomous-send
+ * eligibility surface: `autoSendEligible: boolean` + `denialReasons: string[]`,
+ * read from the related ApprovalItem payload (newest first) or the draft's
+ * `complianceFlags`. All existing draft fields are preserved.
+ */
+export async function getDraftWithEligibility(prisma: PrismaClient, id: string) {
+  const row = await prisma.draftEmail.findUnique({
+    where: { id },
+    include: { approvals: { orderBy: { createdAt: 'desc' } } },
+  });
+  if (!row) throw new NotFoundError(`draft not found: ${id}`, { id });
+  const { autoSendEligible, denialReasons } = extractEligibility(
+    row.approvals,
+    row.complianceFlags,
+  );
+  return { ...row, autoSendEligible, denialReasons };
 }
 
 // ---------------------------------------------------------------------------
@@ -415,6 +470,13 @@ export async function listSettings(prisma: PrismaClient) {
   return prisma.systemSetting.findMany({ orderBy: { key: 'asc' } });
 }
 
+/** Fetch one system setting by key; throws NotFoundError if no row exists. */
+export async function getSetting(prisma: PrismaClient, key: string) {
+  const row = await prisma.systemSetting.findUnique({ where: { key } });
+  if (!row) throw new NotFoundError(`system setting not found: ${key}`, { key });
+  return row;
+}
+
 /**
  * Upsert a SystemSetting value + audit. NOTE: toggling `auto_send_enabled` here
  * only flips the DB setting; an actual auto-send ALSO requires the env flag
@@ -439,4 +501,85 @@ export async function setSetting(prisma: PrismaClient, key: string, value: unkno
   });
 
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Automation counts (controlled-autonomy caps surface)
+// ---------------------------------------------------------------------------
+
+/**
+ * Current rolling-24h autonomous-action counts, delegated to the deterministic
+ * cap repo in `@app/compliance`. Thin read; no LLM, no side effects. Used by the
+ * admin UI / operators to see how much of each cap has been consumed today.
+ */
+export async function getAutomationCounts(prisma: PrismaClient) {
+  const caps = createCapRepo(prisma);
+  const [globalSentToday, calendarEventsToday] = await Promise.all([
+    caps.countGlobalSentToday(),
+    caps.countCalendarEventsToday(),
+  ]);
+  return { globalSentToday, calendarEventsToday };
+}
+
+// ---------------------------------------------------------------------------
+// Unsubscribe (deterministic HTTPS suppression endpoint)
+// ---------------------------------------------------------------------------
+
+/** Input accepted by {@link recordUnsubscribe}. */
+export interface UnsubscribeInput {
+  email?: string;
+  domain?: string;
+  token?: string;
+}
+
+/**
+ * Deterministically record an unsubscribe: add a SuppressionEntry (reason
+ * UNSUBSCRIBE) via the existing suppression service and write the
+ * `unsubscribe.detected` + `suppression.added` audit trail. No LLM. This backs
+ * the HTTPS endpoint referenced by the List-Unsubscribe-Post header.
+ */
+export async function recordUnsubscribe(prisma: PrismaClient, input: UnsubscribeInput) {
+  const email = input.email?.trim().toLowerCase();
+  const domain = input.domain?.trim().toLowerCase();
+
+  const repo = createSuppressionRepo(prisma);
+  await addSuppression(repo, {
+    email,
+    domain,
+    reason: SuppressionReason.UNSUBSCRIBE,
+    source: 'unsubscribe_endpoint',
+    notes: 'one-click unsubscribe via HTTPS endpoint',
+  });
+
+  // Re-read the persisted row to obtain its id (email-keyed entries take
+  // precedence, matching the compliance repo's upsert keying).
+  const entry = email
+    ? await prisma.suppressionEntry.findUnique({ where: { email } })
+    : await prisma.suppressionEntry.findUnique({ where: { domain: domain as string } });
+  if (!entry) throw new NotFoundError('suppression entry not found after unsubscribe');
+
+  // Detection signal first, then the resulting suppression — two audit rows so
+  // the trail mirrors inbound unsubscribe handling.
+  await writeAudit(prisma, {
+    action: 'unsubscribe.detected',
+    actorType: ActorType.PROVIDER,
+    entityType: 'suppression_entry',
+    entityId: entry.id,
+    decision: 'unsubscribe',
+    allowed: true,
+    reason: 'one-click unsubscribe received',
+    metadata: { email: entry.email, domain: entry.domain, hasToken: Boolean(input.token) },
+  });
+  await writeAudit(prisma, {
+    action: 'suppression.added',
+    actorType: ActorType.SYSTEM,
+    entityType: 'suppression_entry',
+    entityId: entry.id,
+    decision: 'suppressed',
+    allowed: true,
+    reason: `unsubscribe (${entry.reason})`,
+    metadata: { email: entry.email, domain: entry.domain, reason: entry.reason },
+  });
+
+  return entry;
 }

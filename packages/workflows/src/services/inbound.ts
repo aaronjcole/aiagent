@@ -20,6 +20,8 @@ import {
   AgentType,
   ApprovalStatus,
   ApprovalType,
+  CalendarAutonomyMode,
+  CalendarEventStatus,
   DraftStatus,
   EmailDirection,
   EscalationError,
@@ -29,6 +31,7 @@ import {
   isAppError,
   type InboundClassification,
   type SchedulingExtraction,
+  type TimeSlot,
 } from '@app/shared';
 import {
   classifyInbound,
@@ -37,8 +40,15 @@ import {
 } from '@app/agents';
 import {
   addSuppression,
+  buildUnsubscribeHeaders,
+  canAutoReplyInboundEmail,
+  canBookNow,
   classifyUnsubscribe,
   createSuppressionRepo,
+  type AutoCalendarInput,
+  type AutoReplyInput,
+  type CalendarPolicyDeps,
+  type EmailPolicyDeps,
 } from '@app/compliance';
 import type { EmailThreadDTO } from '@app/email';
 import type { Deps } from '../deps.js';
@@ -57,6 +67,7 @@ export type InboundOutcome =
   | 'duplicate'
   | 'unsubscribed'
   | 'scheduling_proposed'
+  | 'scheduling_booked'
   | 'scheduling_clarify'
   | 'escalated'
   | 'handled';
@@ -76,6 +87,15 @@ const ENTITY = 'email_message';
 
 /** Confidence below which a non-scheduling category is escalated. */
 const LOW_CONFIDENCE = 0.6;
+
+/**
+ * Deterministic escalation predicate shared by every inbound category branch:
+ * a classification escalates to a human when the classifier asks for one OR its
+ * confidence is below {@link LOW_CONFIDENCE}.
+ */
+function shouldEscalate(classification: InboundClassification): boolean {
+  return classification.requiresHuman || classification.confidence < LOW_CONFIDENCE;
+}
 
 /** Process a single inbound email. */
 export async function inboundEmailService(
@@ -206,7 +226,7 @@ export async function inboundEmailService(
       // automated scheduling flow. If the classifier wants a human or is
       // low-confidence, escalate (same pattern as the other categories) rather
       // than auto-drafting / proposing a meeting.
-      if (classification.requiresHuman || classification.confidence < LOW_CONFIDENCE) {
+      if (shouldEscalate(classification)) {
         return escalateInbound(deps, {
           threadRowId,
           messageRowId: inboundMsg.persistedId,
@@ -250,7 +270,7 @@ export async function inboundEmailService(
     case 'referral':
     case 'out_of_office':
     case 'other': {
-      if (classification.requiresHuman || classification.confidence < LOW_CONFIDENCE) {
+      if (shouldEscalate(classification)) {
         return escalateInbound(deps, {
           threadRowId,
           messageRowId: inboundMsg.persistedId,
@@ -385,6 +405,18 @@ async function suppressAndConfirm(
     via: 'deterministic' | 'classifier';
   },
 ): Promise<InboundEmailResult> {
+  // Audit the deterministic detection FIRST (the opt-out signal itself).
+  await writeAudit(deps, {
+    action: 'unsubscribe.detected',
+    actorType: ActorType.SYSTEM,
+    entityType: ENTITY,
+    entityId: args.messageRowId,
+    decision: 'unsubscribe',
+    allowed: true,
+    reason: args.matchedPhrase ? `matched "${args.matchedPhrase}"` : `via ${args.via}`,
+    metadata: { fromEmail: args.fromEmail, via: args.via },
+  });
+
   const suppressionRepo = createSuppressionRepo(deps.prisma);
   await addSuppression(suppressionRepo, {
     email: args.fromEmail,
@@ -400,8 +432,20 @@ async function suppressAndConfirm(
     });
   }
 
+  // Keep the existing `suppression.add` action AND emit the spec's
+  // `suppression.added` action so downstream consumers can rely on either.
   await writeAudit(deps, {
     action: 'suppression.add',
+    actorType: ActorType.SYSTEM,
+    entityType: ENTITY,
+    entityId: args.messageRowId,
+    decision: 'unsubscribe',
+    allowed: true,
+    reason: args.matchedPhrase ? `matched "${args.matchedPhrase}"` : `via ${args.via}`,
+    metadata: { fromEmail: args.fromEmail, via: args.via },
+  });
+  await writeAudit(deps, {
+    action: 'suppression.added',
     actorType: ActorType.SYSTEM,
     entityType: ENTITY,
     entityId: args.messageRowId,
@@ -557,6 +601,22 @@ async function handleScheduling(
 
   const freeSlots = availability.freeSlots.slice(0, 3);
 
+  // --- CalendarAutonomyMode branch: attempt an autonomous booking when the
+  // deterministic policy allows it; otherwise fall through to the default
+  // PROPOSE_TIMES_ONLY behavior (draft + PROPOSED event, no provider event). ---
+  if (deps.settings.calendarAutonomyMode() === CalendarAutonomyMode.AUTO_BOOK_CONFIRMED) {
+    const booked = await tryAutoBook(deps, {
+      ...args,
+      extraction,
+      timezone,
+      durationMinutes,
+      freeSlots,
+    });
+    if (booked) return booked;
+    // Not booked (policy denied / no slot / provider error) → fall back to the
+    // PROPOSE_TIMES_ONLY path below.
+  }
+
   // --- Draft a scheduling reply (agent RECOMMENDS) ---
   let replyMeta;
   let replyBody: string;
@@ -641,6 +701,424 @@ async function handleScheduling(
     draftId,
     calendarEventId,
   };
+}
+
+/** Collect lowercased participant emails across all messages in a thread. */
+function threadParticipantEmails(thread: EmailThreadDTO): string[] {
+  const set = new Set<string>();
+  for (const m of thread.messages) {
+    if (m.from?.email) set.add(m.from.email.trim().toLowerCase());
+    for (const t of m.to ?? []) if (t.email) set.add(t.email.trim().toLowerCase());
+  }
+  return [...set];
+}
+
+/**
+ * AUTO_BOOK_CONFIRMED path: deterministically decide (via `canBookNow`) whether
+ * to autonomously create a provider calendar event, then create it through the
+ * {@link CalendarProvider} abstraction (NEVER Google directly). On allow it
+ * computes the SPEC calendar idempotency key, short-circuits to the existing
+ * event on a re-run, creates the event, links it, and (policy-permitting) sends
+ * a confirmation email. On deny / no-slot / provider error it returns null so
+ * the caller falls back to the PROPOSE_TIMES_ONLY behavior.
+ */
+async function tryAutoBook(
+  deps: Deps,
+  args: {
+    threadRowId: string;
+    messageRowId: string;
+    prospectId: string | null;
+    thread: EmailThreadDTO;
+    inboundMsg: PersistedInboundMessage;
+    classification: InboundClassification;
+    extraction: SchedulingExtraction;
+    timezone: string;
+    durationMinutes: number;
+    freeSlots: TimeSlot[];
+  },
+): Promise<InboundEmailResult | null> {
+  // Pick the slot the recipient agreed to (selectedSlotIndex), else the first
+  // free slot. `explicitSlotAgreement` requires a concrete selection.
+  const idx = args.extraction.selectedSlotIndex;
+  const explicitSlotAgreement = idx !== null && idx !== undefined;
+  const chosen =
+    (explicitSlotAgreement ? args.freeSlots[idx] : undefined) ?? args.freeSlots[0];
+
+  // Sensitivity flags from the classifier's risk flags (pricing/legal/etc.).
+  const sensitiveFlags = (args.classification.riskFlags ?? []).map((f) => String(f));
+  const attendees = [args.inboundMsg.from.email];
+  const threadParticipants = threadParticipantEmails(args.thread);
+  const nowIso = deps.clock().toISOString();
+
+  // SPEC calendar idempotency key:
+  //   idempotencyKey([email_thread_id, normalized_attendees_joined,
+  //                   event_start, event_end, calendar_id])
+  const normalizedAttendees = [...attendees].map((a) => a.trim().toLowerCase()).sort().join(',');
+  const calendarId = deps.config.googleCalendarId;
+  const eventKey = chosen
+    ? idempotencyKey([
+        args.thread.providerThreadId,
+        normalizedAttendees,
+        chosen.startIso,
+        chosen.endIso,
+        calendarId,
+      ])
+    : '';
+
+  // Idempotency precheck: does an event with this key already exist?
+  const existing = eventKey
+    ? await deps.prisma.calendarEvent.findUnique({
+        where: { idempotencyKey: eventKey },
+        select: { id: true, providerEventId: true },
+      })
+    : null;
+
+  const policyDeps: CalendarPolicyDeps = {
+    settings: deps.settings,
+    caps: deps.caps,
+    config: { ENABLE_AUTO_SCHEDULING: deps.config.enableAutoScheduling },
+    now: deps.clock(),
+  };
+
+  const input: AutoCalendarInput = {
+    fromIsProspect: args.prospectId !== null,
+    classification: {
+      category: args.classification.category,
+      confidence: args.classification.confidence,
+    },
+    explicitSlotAgreement,
+    timezone: args.timezone,
+    timezoneAmbiguous: args.extraction.timezoneAmbiguous,
+    availabilityCheckedAt: nowIso,
+    slotStillFree: Boolean(chosen),
+    startIso: chosen?.startIso ?? '',
+    endIso: chosen?.endIso ?? '',
+    attendees,
+    externalAttendees: attendees,
+    threadParticipants,
+    sensitiveFlags,
+    angry: args.classification.category === 'angry',
+    unsubscribe: false,
+    alreadyExists: Boolean(existing),
+  };
+
+  await writeAudit(deps, {
+    action: 'policy.evaluated',
+    actorType: ActorType.SYSTEM,
+    entityType: 'calendar_event',
+    entityId: existing?.id ?? args.threadRowId,
+    decision: 'auto_book',
+    reason: 'evaluating autonomous calendar-booking policy',
+    metadata: { threadId: args.threadRowId, calendarId },
+  });
+
+  const decision = await canBookNow(input, policyDeps);
+
+  if (!decision.allow) {
+    const paused = decision.reasons.some((r) => r.toLowerCase().includes('kill switch'));
+    await writeAudit(deps, {
+      action: paused ? 'killswitch.triggered' : 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: existing?.id ?? args.threadRowId,
+      decision: 'denied',
+      allowed: false,
+      reason: decision.reasons.join('; '),
+      metadata: { reasons: decision.reasons, threadId: args.threadRowId },
+    });
+    if (paused) {
+      await writeAudit(deps, {
+        action: 'automation.paused',
+        actorType: ActorType.SYSTEM,
+        entityType: 'calendar_event',
+        entityId: existing?.id ?? args.threadRowId,
+        decision: 'paused',
+        allowed: false,
+        reason: decision.reasons.join('; '),
+        metadata: { reasons: decision.reasons },
+      });
+    }
+    // Fall back to PROPOSE_TIMES_ONLY (caller continues to the propose path).
+    return null;
+  }
+
+  await writeAudit(deps, {
+    action: 'policy.allowed',
+    actorType: ActorType.SYSTEM,
+    entityType: 'calendar_event',
+    entityId: existing?.id ?? args.threadRowId,
+    decision: 'allowed',
+    allowed: true,
+    reason: 'all autonomous-booking policy gates passed',
+    metadata: { threadId: args.threadRowId, calendarId },
+  });
+
+  const slot = chosen as TimeSlot;
+
+  // Idempotency: an event with this key already exists (e.g. a re-run after the
+  // create committed) → return it without creating a duplicate.
+  if (existing?.providerEventId) {
+    await writeAudit(deps, {
+      action: 'calendar.create.idempotent',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: existing.id,
+      decision: 'idempotent',
+      allowed: true,
+      reason: 'event already exists for idempotency key',
+      idempotencyKey: eventKey,
+      metadata: { providerEventId: existing.providerEventId },
+    });
+    return {
+      status: 'scheduling_booked',
+      threadId: args.threadRowId,
+      messageId: args.messageRowId,
+      category: 'interested_schedule',
+      calendarEventId: existing.id,
+    };
+  }
+
+  await writeAudit(deps, {
+    action: 'calendar.create.attempted',
+    actorType: ActorType.SYSTEM,
+    entityType: 'calendar_event',
+    entityId: existing?.id ?? args.threadRowId,
+    decision: 'attempting',
+    idempotencyKey: eventKey,
+    metadata: { threadId: args.threadRowId, calendarId },
+  });
+
+  try {
+    const providerEvent = await deps.calendar.createEvent({
+      calendarId,
+      title: `Intro call: ${args.inboundMsg.subject}`,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+      timezone: args.timezone,
+      attendees,
+      idempotencyKey: eventKey,
+    });
+
+    // Persist the CalendarEvent row (CREATED/CONFIRMED) linked to the thread +
+    // prospect, carrying providerEventId + payload + idempotencyKey.
+    const row = await deps.prisma.calendarEvent.upsert({
+      where: { idempotencyKey: eventKey },
+      create: {
+        idempotencyKey: eventKey,
+        prospectId: args.prospectId ?? null,
+        threadId: args.threadRowId,
+        title: `Intro call: ${args.inboundMsg.subject}`,
+        status: CalendarEventStatus.CONFIRMED,
+        providerEventId: providerEvent.providerEventId,
+        startTime: new Date(slot.startIso),
+        endTime: new Date(slot.endIso),
+        timezone: args.timezone,
+        attendees: toJson(attendees.map((email) => ({ email }))) as object,
+      },
+      update: {
+        status: CalendarEventStatus.CONFIRMED,
+        providerEventId: providerEvent.providerEventId,
+      },
+      select: { id: true },
+    });
+
+    if (args.prospectId) {
+      await deps.prisma.prospect.update({
+        where: { id: args.prospectId },
+        data: { status: ProspectStatus.MEETING_BOOKED },
+      });
+    }
+
+    await writeAudit(deps, {
+      action: 'calendar.create.succeeded',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: row.id,
+      decision: 'created',
+      allowed: true,
+      reason: 'autonomous booking policy allowed; provider event created',
+      idempotencyKey: eventKey,
+      metadata: { providerEventId: providerEvent.providerEventId, threadId: args.threadRowId },
+    });
+    // Canonical action the CapRepo counts calendar creations against.
+    await writeAudit(deps, {
+      action: 'calendar.create',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: row.id,
+      decision: 'created',
+      allowed: true,
+      reason: 'autonomous booking',
+      idempotencyKey: eventKey,
+      metadata: { providerEventId: providerEvent.providerEventId },
+    });
+
+    // --- Confirmation email, gated by the inbound auto-reply policy ---
+    await sendOrDraftConfirmation(deps, {
+      threadRowId: args.threadRowId,
+      prospectId: args.prospectId,
+      thread: args.thread,
+      toEmail: args.inboundMsg.from.email,
+      subject: args.inboundMsg.subject,
+      slot,
+      timezone: args.timezone,
+    });
+
+    return {
+      status: 'scheduling_booked',
+      threadId: args.threadRowId,
+      messageId: args.messageRowId,
+      category: 'interested_schedule',
+      calendarEventId: row.id,
+    };
+  } catch (err) {
+    await writeAudit(deps, {
+      action: 'calendar.create.failed',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: existing?.id ?? args.threadRowId,
+      decision: 'failed',
+      allowed: false,
+      reason: err instanceof Error ? err.message : String(err),
+      idempotencyKey: eventKey,
+      metadata: { threadId: args.threadRowId },
+    });
+    // Fall back to PROPOSE_TIMES_ONLY.
+    return null;
+  }
+}
+
+/**
+ * Send a booking-confirmation email when the inbound auto-reply policy allows
+ * it; otherwise draft it (never auto-sent). Reuses the deterministic policy
+ * layer (`canAutoReplyInboundEmail`) — the LLM never decides this.
+ */
+async function sendOrDraftConfirmation(
+  deps: Deps,
+  args: {
+    threadRowId: string;
+    prospectId: string | null;
+    thread: EmailThreadDTO;
+    toEmail: string;
+    subject: string;
+    slot: TimeSlot;
+    timezone: string;
+  },
+): Promise<void> {
+  const body = `You're all set — I've booked us for ${args.slot.startIso} (${args.timezone}). Looking forward to it! If anything changes, just reply here.`;
+
+  const replyInput: AutoReplyInput = {
+    threadId: args.threadRowId,
+    threadHasSensitiveFlag: false,
+    isUnsubscribe: false,
+  };
+  const policyDeps: EmailPolicyDeps = {
+    settings: deps.settings,
+    caps: deps.caps,
+    config: { ENABLE_AUTO_SEND: deps.config.enableAutoSend },
+    now: deps.clock(),
+  };
+
+  const decision = await canAutoReplyInboundEmail(replyInput, policyDeps);
+  const confirmKey = idempotencyKey([args.thread.providerThreadId, 'booking-confirm']);
+
+  if (!decision.allow) {
+    // Draft the confirmation instead of auto-sending it.
+    if (args.prospectId) {
+      await deps.prisma.draftEmail.upsert({
+        where: { idempotencyKey: confirmKey },
+        create: {
+          idempotencyKey: confirmKey,
+          prospectId: args.prospectId,
+          threadId: args.threadRowId,
+          fromEmail: deps.config.defaultFromEmail,
+          fromName: deps.config.defaultFromName,
+          toEmail: args.toEmail,
+          subject: `Re: ${args.subject}`,
+          bodyText: body,
+          status: DraftStatus.PENDING_REVIEW,
+          complianceStatus: 'pass',
+        },
+        update: {},
+        select: { id: true },
+      });
+    }
+    await writeAudit(deps, {
+      action: 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'email_thread',
+      entityId: args.threadRowId,
+      decision: 'denied',
+      allowed: false,
+      reason: decision.reasons.join('; '),
+      idempotencyKey: confirmKey,
+      metadata: { reasons: decision.reasons, kind: 'booking_confirmation' },
+    });
+    return;
+  }
+
+  const headers: Record<string, string> = buildUnsubscribeHeaders({
+    settings: deps.settings,
+    config: { unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl },
+    recipient: args.toEmail.trim().toLowerCase(),
+  }) as Record<string, string>;
+
+  await writeAudit(deps, {
+    action: 'email.send.attempted',
+    actorType: ActorType.SYSTEM,
+    entityType: 'email_thread',
+    entityId: args.threadRowId,
+    decision: 'attempting',
+    idempotencyKey: confirmKey,
+    metadata: { kind: 'booking_confirmation' },
+  });
+
+  try {
+    const sendResult = await deps.email.replyToThread({
+      threadId: args.thread.providerThreadId,
+      to: [{ email: args.toEmail }],
+      from: { email: deps.config.defaultFromEmail, name: deps.config.defaultFromName },
+      subject: `Re: ${args.subject}`,
+      body,
+      idempotencyKey: confirmKey,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    });
+    await writeAudit(deps, {
+      action: 'email.send.succeeded',
+      actorType: ActorType.SYSTEM,
+      entityType: 'email_thread',
+      entityId: args.threadRowId,
+      decision: 'sent',
+      allowed: true,
+      reason: 'autonomous booking confirmation sent',
+      idempotencyKey: confirmKey,
+      metadata: { providerMessageId: sendResult.providerMessageId, kind: 'booking_confirmation' },
+    });
+    // Canonical reply action the CapRepo counts inbound auto-replies against.
+    await writeAudit(deps, {
+      action: 'email.reply',
+      actorType: ActorType.SYSTEM,
+      entityType: 'EmailThread',
+      entityId: args.threadRowId,
+      decision: 'replied',
+      allowed: true,
+      reason: 'autonomous booking confirmation',
+      idempotencyKey: confirmKey,
+      metadata: { kind: 'booking_confirmation' },
+    });
+  } catch (err) {
+    await writeAudit(deps, {
+      action: 'email.send.failed',
+      actorType: ActorType.SYSTEM,
+      entityType: 'email_thread',
+      entityId: args.threadRowId,
+      decision: 'failed',
+      allowed: false,
+      reason: err instanceof Error ? err.message : String(err),
+      idempotencyKey: confirmKey,
+      metadata: { kind: 'booking_confirmation' },
+    });
+  }
 }
 
 /** Create a (never auto-sent) reply DraftEmail for scheduling. */

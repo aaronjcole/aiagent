@@ -5,10 +5,23 @@
  * human review rather than sending.
  */
 import { describe, it, expect } from 'vitest';
-import { ProspectStatus, ResearchStatus, DraftStatus } from '@app/shared';
+import { ProspectStatus, ResearchStatus, DraftStatus, EmailAutonomyMode } from '@app/shared';
+import { readySettings } from '@app/compliance';
+import type { SETTING_KEYS, AutonomySettingValue } from '@app/shared';
 import { outboundSequenceService } from './outbound.js';
 import { FakePrisma, makeDeps, FixedLlmProvider } from './test-helpers.js';
 import type { ResearchOutput, ComplianceReview, OutreachDraft } from '@app/shared';
+
+/** A ready, autonomous-send-enabled settings posture (all readiness flags on,
+ * mode=limited_auto_send) with optional overrides. */
+function autoSendSettings(
+  over: Partial<{ [K in SETTING_KEYS]: AutonomySettingValue<K> }> = {},
+): ReturnType<typeof readySettings> {
+  return readySettings({ emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND, ...over });
+}
+
+/** A clock inside business hours (12:00 ET = 16:00 UTC in summer EDT). */
+const BUSINESS_HOURS_ISO = '2026-06-30T16:00:00.000Z';
 
 const RESEARCH: ResearchOutput = {
   status: 'researched',
@@ -141,14 +154,15 @@ describe('outboundSequenceService', () => {
     expect(complianceGate!.allowed).toBe(false);
   });
 
-  it('auto-send ON + all gates pass: sends exactly once (idempotent)', async () => {
+  it('LIMITED_AUTO_SEND + all policy gates pass: sends exactly once (idempotent)', async () => {
     const prisma = new FakePrisma();
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      config: { autoSendEnabled: true, sendingEnabled: true },
+      config: { autoSendEnabled: true, sendingEnabled: true, enableAutoSend: true },
+      settings: autoSendSettings(),
+      clockIso: BUSINESS_HOURS_ISO,
     });
-    prisma.systemSetting.insert({ id: 'set1', key: 'auto_send_enabled', value: true });
 
     const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
 
@@ -156,37 +170,149 @@ describe('outboundSequenceService', () => {
     expect(prisma.draftEmail.rows[0]!.status).toBe(DraftStatus.SENT);
     expect(prisma.draftEmail.rows[0]!.sentAt).toBeTruthy();
     expect(prisma.prospect.rows[0]!.status).toBe(ProspectStatus.SEQUENCED);
-    const sends = prisma.auditLog.rows.filter((a) => a.action === 'email.send');
-    expect(sends).toHaveLength(1);
+    // policy allowed + succeeded audits present.
+    expect(prisma.auditLog.rows.some((a) => a.action === 'policy.allowed')).toBe(true);
+    expect(prisma.auditLog.rows.filter((a) => a.action === 'email.send.succeeded')).toHaveLength(1);
+    expect(prisma.auditLog.rows.filter((a) => a.action === 'email.send')).toHaveLength(1);
 
-    // Re-run is idempotent: same draft key, no second send result divergence.
+    // Re-run is idempotent: same draft key, no second send.
     const again = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
     expect(again.status).toBe('sent');
     expect(prisma.draftEmail.rows).toHaveLength(1);
-    // CRITICAL: the rerun must NOT send again — exactly one email.send audit.
-    expect(prisma.auditLog.rows.filter((a) => a.action === 'email.send')).toHaveLength(1);
+    // CRITICAL: the rerun must NOT send again — exactly one succeeded audit.
+    expect(prisma.auditLog.rows.filter((a) => a.action === 'email.send.succeeded')).toHaveLength(1);
   });
 
-  it('auto-send env + setting ON but SENDING_ENABLED off: NO send, approval created', async () => {
+  it('auto-send disabled by env (enableAutoSend=false): ApprovalItem, no send', async () => {
     const prisma = new FakePrisma();
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      // Auto-send fully enabled, but the master kill switch is OFF.
-      config: { autoSendEnabled: true, sendingEnabled: false },
+      config: { enableAutoSend: false, sendingEnabled: true },
+      settings: autoSendSettings(),
+      clockIso: BUSINESS_HOURS_ISO,
     });
-    prisma.systemSetting.insert({ id: 'set1', key: 'auto_send_enabled', value: true });
 
     const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
 
     expect(result.status).toBe('pending_approval');
-    expect(prisma.draftEmail.rows[0]!.status).toBe(DraftStatus.PENDING_REVIEW);
-    // No outbound send happened, and no send audit was written.
-    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send')).toBe(false);
-    // An approval item was created for the outreach send.
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
     expect(prisma.approvalItem.rows.some((a) => a.type === 'outreach_send')).toBe(true);
-    // The sending_enabled gate is recorded as failed.
-    const switchGate = prisma.auditLog.rows.find((a) => a.action === 'outbound.gate.sending_enabled');
-    expect(switchGate!.allowed).toBe(false);
+    expect(prisma.auditLog.rows.some((a) => a.action === 'policy.denied')).toBe(true);
+    expect(prisma.auditLog.rows.some((a) => a.action === 'human_approval.fallback.created')).toBe(true);
+  });
+
+  it('auto-send disabled by SystemSetting (mode=approval_required): no send (default path)', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      // Default mode (approval_required) → never reaches the policy auto-send.
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
+    // The policy layer was never consulted (we are not in LIMITED_AUTO_SEND).
+    expect(prisma.auditLog.rows.some((a) => a.action === 'policy.evaluated')).toBe(false);
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'outreach_send')).toBe(true);
+  });
+
+  it('blocked by missing readiness: ApprovalItem + policy.denied', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      // limited_auto_send mode but readiness NOT all-ready (default flags off).
+      settings: { emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND },
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
+    const denied = prisma.auditLog.rows.find((a) => a.action === 'policy.denied');
+    expect(denied).toBeTruthy();
+    expect(String(denied!.reason)).toContain('readiness');
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'outreach_send')).toBe(true);
+  });
+
+  it('blocked by failed compliance review: ApprovalItem + policy.denied', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(failReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      settings: autoSendSettings(),
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
+    expect(prisma.auditLog.rows.some((a) => a.action === 'policy.denied')).toBe(true);
+  });
+
+  it('blocked by caps (per-sender daily cap reached): ApprovalItem + policy.denied', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      settings: autoSendSettings({ maxAutoSendsPerSenderPerDay: 1 }),
+      caps: { sender: { 'outreach@example.com': 5 } },
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
+    const denied = prisma.auditLog.rows.find((a) => a.action === 'policy.denied');
+    expect(String(denied!.reason)).toContain('per-sender daily');
+  });
+
+  it('kill switch (pauseOutboundSending): blocked + killswitch.triggered + automation.paused', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      settings: autoSendSettings({ pauseOutboundSending: true }),
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send.succeeded')).toBe(false);
+    expect(prisma.auditLog.rows.some((a) => a.action === 'killswitch.triggered')).toBe(true);
+    expect(prisma.auditLog.rows.some((a) => a.action === 'automation.paused')).toBe(true);
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'outreach_send')).toBe(true);
+  });
+
+  it('blocked by unsubscribe (prospect previously unsubscribed) is caught up front (ineligible)', async () => {
+    // An unsubscribed prospect is ineligible BEFORE drafting (deterministic
+    // eligibility), so the draft/approval flow is never reached — the safest
+    // possible outcome. This documents the unsubscribe defense.
+    const prisma = new FakePrisma();
+    seed(prisma);
+    prisma.prospect.rows[0]!.status = ProspectStatus.UNSUBSCRIBED;
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      config: { enableAutoSend: true, sendingEnabled: true },
+      settings: autoSendSettings(),
+      clockIso: BUSINESS_HOURS_ISO,
+    });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+    expect(result.status).toBe('ineligible');
+    expect(prisma.draftEmail.rows).toHaveLength(0);
   });
 });

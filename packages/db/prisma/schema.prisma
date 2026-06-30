@@ -300,6 +300,8 @@ model DraftEmail {
   sequence   OutreachSequence? @relation(fields: [sequenceId], references: [id])
   sequenceStepId String?
   sequenceStep   SequenceStep? @relation(fields: [sequenceStepId], references: [id])
+  senderAccountId String?
+  senderAccount   SenderAccount? @relation(fields: [senderAccountId], references: [id])
 
   direction EmailDirection @default(outbound)
   fromEmail String
@@ -406,6 +408,21 @@ model SuppressionEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Sender accounts (sending identities used by controlled-autonomy auto-send)
+// ---------------------------------------------------------------------------
+
+model SenderAccount {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String
+  active    Boolean   @default(true)
+  pausedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  drafts DraftEmail[]
+}
+
+// ---------------------------------------------------------------------------
 // Agent runs (observability for every LLM call)
 // ---------------------------------------------------------------------------
 
@@ -488,6 +505,10 @@ model DeadLetter {
   id            String           @id @default(cuid())
   workflowType  String
   workflowId    String?
+  // Stable dedupe key derived from workflowType + workflowId, so a Temporal
+  // retry of the dead-letter recording cannot create a duplicate row. Always
+  // present (callers derive it deterministically).
+  dedupeKey     String           @unique
   // The workflow input that produced the terminal failure.
   input         Json
   error         String

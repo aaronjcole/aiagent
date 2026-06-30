@@ -71,6 +71,31 @@ export interface SendCountRepo {
 }
 
 /**
+ * Counts/timestamps for controlled-autonomy caps.
+ *
+ * "Today" is defined as a ROLLING last-24-hours window (consistent with the
+ * existing {@link SendCountRepo}). Counts derive from `AuditLog` action rows:
+ *  - autonomous sends → `email.send` rows with `allowed = true`,
+ *  - autonomous replies → `email.reply` rows with `allowed = true`,
+ *  - calendar creations → `calendar.create` rows with `allowed = true`.
+ * Implementations are injectable; tests use {@link import('./fakes.js').FakeCapRepo}.
+ */
+export interface CapRepo {
+  /** Autonomous sends across ALL senders in the last 24h. */
+  countGlobalSentToday(): Promise<number>;
+  /** Autonomous sends from a specific sender in the last 24h. */
+  countSenderSentToday(senderEmail: string): Promise<number>;
+  /** Autonomous sends to a specific recipient domain in the last 24h. */
+  countDomainSentToday(domain: string): Promise<number>;
+  /** Timestamp of the most recent autonomous send from a sender, or null. */
+  lastSenderSendAt(senderEmail: string): Promise<Date | null>;
+  /** Autonomous replies on a specific thread in the last 24h. */
+  countThreadAutoRepliesToday(threadId: string): Promise<number>;
+  /** Calendar events created in the last 24h. */
+  countCalendarEventsToday(): Promise<number>;
+}
+
+/**
  * Prior inbound reply signals for a prospect/thread used by eligibility checks.
  * Implementations derive these from persisted classifications/replies.
  */

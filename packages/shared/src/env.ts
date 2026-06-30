@@ -59,6 +59,12 @@ export const ConfigSchema = z.object({
   // Safety gates — default OFF
   autoSendEnabled: boolFromString.default(false),
   sendingEnabled: boolFromString.default(false),
+  // Controlled-autonomy master env flags — default OFF. These are env-level
+  // enablers that must ALSO be on (alongside the SystemSetting modes) before any
+  // autonomous send / booking can occur. They are additive to and independent
+  // of the legacy `sendingEnabled`/`autoSendEnabled` switches.
+  enableAutoSend: boolFromString.default(false),
+  enableAutoScheduling: boolFromString.default(false),
   dailySendCap: intFromString(200),
   perInboxDailyCap: intFromString(50),
   perDomainDailyCap: intFromString(10),
@@ -127,6 +133,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
     autoSendEnabled: env.AUTO_SEND_ENABLED,
     sendingEnabled: env.SENDING_ENABLED,
+    enableAutoSend: env.ENABLE_AUTO_SEND,
+    enableAutoScheduling: env.ENABLE_AUTO_SCHEDULING,
     dailySendCap: env.DAILY_SEND_CAP,
     perInboxDailyCap: env.PER_INBOX_DAILY_CAP,
     perDomainDailyCap: env.PER_DOMAIN_DAILY_CAP,
