@@ -20,6 +20,15 @@ export default async function ResearchPage() {
 
   const results = asArray<ResearchResult>(res.data);
 
+  if (results === null) {
+    return (
+      <div>
+        <h2>Research</h2>
+        <ApiUnreachable error="Unexpected response shape from /research." />
+      </div>
+    );
+  }
+
   return (
     <div>
       <h2>Research results</h2>

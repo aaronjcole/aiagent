@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { read } from '../../lib/api';
 import { asArray, prospectName, fmtDate } from '../../lib/format';
-import { ApiUnreachable } from '../../components/ApiError';
+import { ApiUnreachable, ApiSideWarning } from '../../components/ApiError';
 import type { Prospect, OutreachSequence } from '../../lib/types';
 import { ProspectRowActions } from './ProspectActions';
 import { CreateProspect } from './CreateProspect';
@@ -14,7 +14,15 @@ export default async function ProspectsPage() {
     read<unknown>('/sequences'),
   ]);
 
-  const sequences = sequencesRes.ok ? asArray<OutreachSequence>(sequencesRes.data) : [];
+  const sequences = sequencesRes.ok ? asArray<OutreachSequence>(sequencesRes.data) : null;
+  // Distinguish a failed/malformed side query from a genuinely empty list.
+  const sequencesError = !sequencesRes.ok
+    ? sequencesRes.error
+    : sequences === null
+      ? 'Unexpected response shape.'
+      : null;
+
+  const prospects = prospectsRes.ok ? asArray<Prospect>(prospectsRes.data) : null;
 
   return (
     <div>
@@ -25,10 +33,14 @@ export default async function ProspectsPage() {
         <CreateProspect />
       </div>
 
+      {sequencesError ? <ApiSideWarning label="sequences" error={sequencesError} /> : null}
+
       {!prospectsRes.ok ? (
         <ApiUnreachable error={prospectsRes.error} />
+      ) : prospects === null ? (
+        <ApiUnreachable error="Unexpected response shape from /prospects." />
       ) : (
-        <ProspectsTable prospects={asArray<Prospect>(prospectsRes.data)} sequences={sequences} />
+        <ProspectsTable prospects={prospects} sequences={sequences ?? []} />
       )}
     </div>
   );

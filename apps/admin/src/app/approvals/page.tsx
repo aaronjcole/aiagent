@@ -21,12 +21,21 @@ export default async function ApprovalsPage() {
 
   const approvals = asArray<ApprovalItem>(res.data);
 
+  if (approvals === null) {
+    return (
+      <div>
+        <h2>Approvals</h2>
+        <ApiUnreachable error="Unexpected response shape from /approvals." />
+      </div>
+    );
+  }
+
   return (
     <div>
       <h2>Pending approvals</h2>
       <p className="muted">
-        Approving or rejecting calls the API, which records the decision in the audit log and
-        releases or cancels the gated send.
+        Pending items include gated sends and escalations. Approving or rejecting calls the API,
+        which records the decision in the audit log and releases or cancels the pending action.
       </p>
       {approvals.length === 0 ? (
         <p className="muted">No pending approvals. 🎉</p>

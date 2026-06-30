@@ -14,3 +14,16 @@ export function ApiUnreachable({ error }: { error: string }) {
     </div>
   );
 }
+
+/**
+ * Small inline warning for a non-fatal side-query failure: the main data loaded
+ * but a secondary query (e.g. `/sequences`, `/research`) failed. Surfaces the
+ * problem without making it look like "no data".
+ */
+export function ApiSideWarning({ label, error }: { label: string; error: string }) {
+  return (
+    <div className="msg err" role="alert" style={{ marginBottom: 12 }}>
+      <strong>Could not load {label}.</strong> {error}
+    </div>
+  );
+}

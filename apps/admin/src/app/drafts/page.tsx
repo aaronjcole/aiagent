@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 export default async function DraftsPage({ searchParams }: { searchParams: { status?: string } }) {
   const status = searchParams.status ?? '';
   const res = await read<unknown>('/drafts', { status: status || undefined });
-  const drafts = res.ok ? asArray<DraftEmail>(res.data) : [];
+  const drafts = res.ok ? asArray<DraftEmail>(res.data) : null;
+  const invalidShape = res.ok && drafts === null;
 
   return (
     <div>
@@ -22,6 +23,8 @@ export default async function DraftsPage({ searchParams }: { searchParams: { sta
 
       {!res.ok ? (
         <ApiUnreachable error={res.error} />
+      ) : invalidShape || drafts === null ? (
+        <ApiUnreachable error="Unexpected response shape from /drafts." />
       ) : drafts.length === 0 ? (
         <p className="muted">No drafts{status ? ` with status “${status}”` : ''}.</p>
       ) : (

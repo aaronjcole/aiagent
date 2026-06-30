@@ -48,6 +48,8 @@ export interface FakeSendCounts {
   inbox?: Record<string, number>;
   domain?: Record<string, number>;
   sequenceSteps?: Record<string, number>;
+  /** All-time sends per prospectId. */
+  prospectTotal?: Record<string, number>;
 }
 
 export class FakeSendCountRepo implements SendCountRepo {
@@ -66,6 +68,9 @@ export class FakeSendCountRepo implements SendCountRepo {
   async countSequenceStepsSent(prospectId: string, sequenceId?: string): Promise<number> {
     const key = sequenceId ? `${prospectId}:${sequenceId}` : prospectId;
     return this.counts.sequenceSteps?.[key] ?? this.counts.sequenceSteps?.[prospectId] ?? 0;
+  }
+  async countProspectSentTotal(prospectId: string): Promise<number> {
+    return this.counts.prospectTotal?.[prospectId] ?? 0;
   }
 }
 

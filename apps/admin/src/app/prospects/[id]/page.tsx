@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { read } from '../../../lib/api';
 import { asArray, prospectName, fmtDate, fmtConfidence } from '../../../lib/format';
-import { ApiUnreachable } from '../../../components/ApiError';
+import { ApiUnreachable, ApiSideWarning } from '../../../components/ApiError';
 import type { Prospect, ResearchResult, OutreachSequence } from '../../../lib/types';
 import { ProspectRowActions } from '../ProspectActions';
 
@@ -24,8 +24,20 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
   }
 
   const p = prospectRes.data;
-  const research = researchRes.ok ? asArray<ResearchResult>(researchRes.data) : [];
-  const sequences = sequencesRes.ok ? asArray<OutreachSequence>(sequencesRes.data) : [];
+  const research = researchRes.ok ? asArray<ResearchResult>(researchRes.data) : null;
+  const sequences = sequencesRes.ok ? asArray<OutreachSequence>(sequencesRes.data) : null;
+
+  // Surface side-query failures (don't make them look like "no data").
+  const researchError = !researchRes.ok
+    ? researchRes.error
+    : research === null
+      ? 'Unexpected response shape.'
+      : null;
+  const sequencesError = !sequencesRes.ok
+    ? sequencesRes.error
+    : sequences === null
+      ? 'Unexpected response shape.'
+      : null;
 
   return (
     <div>
@@ -61,8 +73,9 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
             </tr>
           </tbody>
         </table>
+        {sequencesError ? <ApiSideWarning label="sequences" error={sequencesError} /> : null}
         <div style={{ marginTop: 12 }}>
-          <ProspectRowActions prospectId={p.id} sequences={sequences} />
+          <ProspectRowActions prospectId={p.id} sequences={sequences ?? []} />
         </div>
       </div>
 
@@ -71,7 +84,9 @@ export default async function ProspectDetailPage({ params }: { params: { id: str
           <h3 style={{ margin: 0 }}>Research</h3>
           <Link href="/research">All research →</Link>
         </div>
-        {research.length === 0 ? (
+        {researchError ? (
+          <ApiSideWarning label="research" error={researchError} />
+        ) : research === null || research.length === 0 ? (
           <p className="muted">No research yet. Use “Run research” above.</p>
         ) : (
           <table style={{ marginTop: 12 }}>

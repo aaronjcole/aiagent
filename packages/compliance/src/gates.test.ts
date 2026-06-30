@@ -31,7 +31,7 @@ function baseArgs(overrides: Partial<RunOutboundGatesArgs> = {}): RunOutboundGat
     complianceReview: passReview,
     suppressionRepo: new FakeSuppressionRepo(),
     sendCountRepo: new FakeSendCountRepo({}),
-    capConfig: { dailySendCap: 200, perInboxDailyCap: 50, perDomainDailyCap: 10, sequenceMaxSteps: 5 },
+    capConfig: { dailySendCap: 200, perInboxDailyCap: 50, perDomainDailyCap: 10, sequenceMaxSteps: 5, perProspectMaxSends: 5 },
     footerConfig: {
       unsubscribeBaseUrl: 'https://example.com/unsubscribe',
       companyAddress: '123 Example St, City, ST 00000, USA',
@@ -123,11 +123,14 @@ describe('runOutboundGates', () => {
     expect(r.requiresApproval).toBe(true);
   });
 
-  it('human approval present clears requiresApproval without auto-send', async () => {
+  it('human approval present authorizes a send (canSendWithApproval) without auto-send', async () => {
     const r = await runOutboundGates(baseArgs({ hasHumanApproval: true }));
     expect(r.allowed).toBe(true);
-    expect(r.requiresApproval).toBe(false);
+    // Safe but not cleared for AUTONOMOUS send -> still flagged as approval-gated.
+    expect(r.requiresApproval).toBe(true);
     expect(r.canAutoSend).toBe(false);
+    // Master switch is on (baseArgs) + approval present -> approved-send path is open.
+    expect(r.canSendWithApproval).toBe(true);
   });
 
   it('suppressed recipient blocks even with auto-send on', async () => {
@@ -157,5 +160,66 @@ describe('runOutboundGates', () => {
     const r = await runOutboundGates(baseArgs({ prospect: { id: 'p', email: 'bad' }, toEmail: undefined }));
     expect(r.allowed).toBe(false);
     expect(gate(r.decisions, 'prospect_exists')).toBe(false);
+  });
+
+  it('a prior unsubscribe fails not_unsubscribed and blocks the send', async () => {
+    const r = await runOutboundGates(
+      baseArgs({ replyHistory: { unsubscribed: true, negativeReply: false } }),
+    );
+    expect(gate(r.decisions, 'not_unsubscribed')).toBe(false);
+    expect(r.allowed).toBe(false);
+    expect(r.canAutoSend).toBe(false);
+    expect(r.canSendWithApproval).toBe(false);
+  });
+
+  it('a prior negative reply fails no_negative_reply and blocks the send', async () => {
+    const r = await runOutboundGates(
+      baseArgs({ replyHistory: { unsubscribed: false, negativeReply: true } }),
+    );
+    expect(gate(r.decisions, 'no_negative_reply')).toBe(false);
+    expect(r.allowed).toBe(false);
+    expect(r.canAutoSend).toBe(false);
+    expect(r.canSendWithApproval).toBe(false);
+  });
+
+  it('human approval + master switch on (auto-send OFF) -> canSendWithApproval, not auto-send', async () => {
+    const r = await runOutboundGates(
+      baseArgs({
+        config: { autoSendEnabled: false, sendingEnabled: true },
+        systemAutoSendSetting: false,
+        hasHumanApproval: true,
+      }),
+    );
+    expect(r.allowed).toBe(true);
+    expect(r.canSendWithApproval).toBe(true);
+    expect(r.canAutoSend).toBe(false);
+    // Safe but not cleared for autonomous send -> requiresApproval stays true.
+    expect(r.requiresApproval).toBe(true);
+  });
+
+  it('master switch off -> canSendWithApproval false even with human approval', async () => {
+    const r = await runOutboundGates(
+      baseArgs({
+        config: { autoSendEnabled: false, sendingEnabled: false },
+        systemAutoSendSetting: false,
+        hasHumanApproval: true,
+      }),
+    );
+    expect(r.canSendWithApproval).toBe(false);
+    expect(r.canAutoSend).toBe(false);
+  });
+
+  it('a failing safety gate -> canSendWithApproval false even with approval', async () => {
+    const r = await runOutboundGates(
+      baseArgs({
+        complianceReview: failReview,
+        config: { autoSendEnabled: false, sendingEnabled: true },
+        hasHumanApproval: true,
+      }),
+    );
+    expect(r.allowed).toBe(false);
+    expect(gate(r.decisions, 'compliance_review')).toBe(false);
+    expect(r.canSendWithApproval).toBe(false);
+    expect(r.canAutoSend).toBe(false);
   });
 });

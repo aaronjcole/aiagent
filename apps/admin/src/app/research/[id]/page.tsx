@@ -6,6 +6,21 @@ import type { ResearchResult } from '../../../lib/types';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * Returns the URL only if it is a syntactically valid http(s) URL; otherwise
+ * null. Prevents `javascript:`/`data:` scheme execution when rendering
+ * API-provided source links as anchors in the admin context.
+ */
+function safeExternalHref(value?: string | null): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function ResearchDetailPage({ params }: { params: { id: string } }) {
   const res = await read<ResearchResult>(`/research/${params.id}`);
 
@@ -72,19 +87,22 @@ export default async function ResearchDetailPage({ params }: { params: { id: str
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Personalization points</h3>
           <ul>
-            {out.personalizationPoints.map((pt, i) => (
-              <li key={i}>
-                {pt.point}
-                {pt.sourceUrl ? (
-                  <>
-                    {' '}
-                    <a href={pt.sourceUrl} target="_blank" rel="noreferrer">
-                      (source)
-                    </a>
-                  </>
-                ) : null}
-              </li>
-            ))}
+            {out.personalizationPoints.map((pt, i) => {
+              const href = safeExternalHref(pt.sourceUrl);
+              return (
+                <li key={i}>
+                  {pt.point}
+                  {href ? (
+                    <>
+                      {' '}
+                      <a href={href} target="_blank" rel="noreferrer">
+                        (source)
+                      </a>
+                    </>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}
@@ -93,18 +111,21 @@ export default async function ResearchDetailPage({ params }: { params: { id: str
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Sources ({out.sources.length})</h3>
           <ul>
-            {out.sources.map((s, i) => (
-              <li key={i}>
-                {s.url ? (
-                  <a href={s.url} target="_blank" rel="noreferrer">
-                    {s.title ?? s.url}
-                  </a>
-                ) : (
-                  (s.title ?? '—')
-                )}
-                {s.snippet ? <div className="muted">{s.snippet}</div> : null}
-              </li>
-            ))}
+            {out.sources.map((s, i) => {
+              const href = safeExternalHref(s.url);
+              return (
+                <li key={i}>
+                  {href ? (
+                    <a href={href} target="_blank" rel="noreferrer">
+                      {s.title ?? s.url}
+                    </a>
+                  ) : (
+                    (s.title ?? s.url ?? '—')
+                  )}
+                  {s.snippet ? <div className="muted">{s.snippet}</div> : null}
+                </li>
+              );
+            })}
           </ul>
         </div>
       ) : null}

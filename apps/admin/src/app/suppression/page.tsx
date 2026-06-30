@@ -8,7 +8,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function SuppressionPage() {
   const res = await read<unknown>('/suppression');
-  const entries = res.ok ? asArray<SuppressionEntry>(res.data) : [];
+  const entries = res.ok ? asArray<SuppressionEntry>(res.data) : null;
+  const invalidShape = res.ok && entries === null;
 
   return (
     <div>
@@ -25,6 +26,8 @@ export default async function SuppressionPage() {
 
       {!res.ok ? (
         <ApiUnreachable error={res.error} />
+      ) : invalidShape || entries === null ? (
+        <ApiUnreachable error="Unexpected response shape from /suppression." />
       ) : entries.length === 0 ? (
         <p className="muted">No suppression entries.</p>
       ) : (

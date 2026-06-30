@@ -7,7 +7,7 @@
  */
 
 import type { PrismaClient } from '@app/db';
-import { EmailDirection } from '@app/shared';
+import { DraftStatus, EmailDirection } from '@app/shared';
 import type {
   AddSuppressionInput,
   ReplyHistoryRepo,
@@ -116,6 +116,16 @@ export function createSendCountRepo(prisma: PrismaClient): SendCountRepo {
           direction: EmailDirection.OUTBOUND,
           sentAt: { not: null },
           ...(sequenceId ? { sequenceId } : {}),
+        },
+      });
+    },
+    async countProspectSentTotal(prospectId: string): Promise<number> {
+      // All-time outbound sends to this prospect across every sequence.
+      return prisma.draftEmail.count({
+        where: {
+          prospectId,
+          direction: EmailDirection.OUTBOUND,
+          status: DraftStatus.SENT,
         },
       });
     },

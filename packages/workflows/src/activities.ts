@@ -13,6 +13,8 @@ import {
   outboundSequenceService,
   inboundEmailService,
   confirmAndCreateCalendarEvent,
+  sendApprovedDraft,
+  recordTerminalFailure,
   type ResearchProspectInput,
   type ResearchProspectResult,
   type OutboundSequenceInput,
@@ -21,6 +23,10 @@ import {
   type InboundEmailResult,
   type ConfirmAndCreateInput,
   type ConfirmAndCreateResult,
+  type SendApprovedDraftInput,
+  type SendApprovedDraftResult,
+  type RecordTerminalFailureInput,
+  type RecordTerminalFailureResult,
 } from './services/index.js';
 
 /**
@@ -72,10 +78,26 @@ export async function confirmCalendarEventActivity(
   return confirmAndCreateCalendarEvent(await getDeps(), input);
 }
 
+/** Activity: send a human-APPROVED draft (gated on SENDING_ENABLED + approval). */
+export async function sendApprovedDraftActivity(
+  input: SendApprovedDraftInput,
+): Promise<SendApprovedDraftResult> {
+  return sendApprovedDraft(await getDeps(), input);
+}
+
+/** Activity: durably record a terminal workflow failure (dead-letter). */
+export async function recordTerminalFailureActivity(
+  input: RecordTerminalFailureInput,
+): Promise<RecordTerminalFailureResult> {
+  return recordTerminalFailure(await getDeps(), input);
+}
+
 /** The activity surface registered by the worker; also the `typeof` proxied. */
 export type Activities = {
   researchProspectActivity: typeof researchProspectActivity;
   outboundSequenceActivity: typeof outboundSequenceActivity;
   inboundEmailActivity: typeof inboundEmailActivity;
   confirmCalendarEventActivity: typeof confirmCalendarEventActivity;
+  sendApprovedDraftActivity: typeof sendApprovedDraftActivity;
+  recordTerminalFailureActivity: typeof recordTerminalFailureActivity;
 };

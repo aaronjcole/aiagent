@@ -3,7 +3,7 @@ import { EmailDirection, ProspectStatus } from '@app/shared';
 import type { InboundClassification, SchedulingExtraction, SchedulingReplyDraft } from '@app/shared';
 import { MockEmailProvider } from '@app/email';
 import { inboundEmailService } from './inbound.js';
-import { FakePrisma, makeDeps, FixedLlmProvider } from './test-helpers.js';
+import { FakePrisma, makeDeps, FixedLlmProvider, FailingLlmProvider } from './test-helpers.js';
 
 function seedProspect(prisma: FakePrisma, email = 'jane@acme.test'): void {
   prisma.prospect.insert({
@@ -136,6 +136,101 @@ describe('inboundEmailService', () => {
     expect(prisma.draftEmail.rows).toHaveLength(1);
     expect(prisma.calendarEvent.rows).toHaveLength(0);
     expect(prisma.auditLog.rows.some((a) => a.action === 'scheduling.clarify')).toBe(true);
+  });
+
+  it('invalid IANA timezone: clarification draft, NO event (never reaches provider)', async () => {
+    const prisma = new FakePrisma();
+    seedProspect(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: new FixedLlmProvider({
+        inbound_classify: classification(),
+        // A bogus tz string the LLM might emit — must NOT reach getAvailability /
+        // createEvent (which build an Intl.DateTimeFormat and throw RangeError).
+        scheduling_extract: extraction({ timezone: 'Not/AZone' }),
+        scheduling_reply: REPLY,
+      }),
+    });
+    const { threadId, messageId } = preseedThread(deps, 'Lets meet at 3pm tomorrow');
+
+    const result = await inboundEmailService(deps, { providerMessageId: messageId, threadId });
+
+    expect(result.status).toBe('scheduling_clarify');
+    expect(prisma.draftEmail.rows).toHaveLength(1);
+    expect(prisma.calendarEvent.rows).toHaveLength(0);
+    const clarify = prisma.auditLog.rows.find((a) => a.action === 'scheduling.clarify');
+    expect(clarify).toBeTruthy();
+    expect(String(clarify!.reason)).toContain('invalid');
+  });
+
+  it('interested_schedule but requiresHuman/low-confidence: escalates (no auto-scheduling)', async () => {
+    const prisma = new FakePrisma();
+    seedProspect(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: new FixedLlmProvider({
+        inbound_classify: classification({ requiresHuman: true }),
+        scheduling_extract: extraction(),
+        scheduling_reply: REPLY,
+      }),
+    });
+    const { threadId, messageId } = preseedThread(deps, 'I am interested, can we meet next week?');
+
+    const result = await inboundEmailService(deps, { providerMessageId: messageId, threadId });
+
+    expect(result.status).toBe('escalated');
+    expect(result.category).toBe('interested_schedule');
+    // No scheduling side-effects: no event, no extractor run.
+    expect(prisma.calendarEvent.rows).toHaveLength(0);
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'escalation')).toBe(true);
+  });
+
+  it('subject-line unsubscribe (body neutral): suppression added via subject', async () => {
+    const prisma = new FakePrisma();
+    seedProspect(prisma);
+    const deps = makeDeps(prisma);
+    // Body has no opt-out phrase; the subject carries it.
+    const mock = deps.email as MockEmailProvider;
+    const [thread] = mock.preseed([
+      {
+        providerThreadId: 'thr_unsub',
+        subject: 'unsubscribe',
+        messages: [
+          {
+            providerMessageId: 'msg_unsub',
+            from: { email: 'jane@acme.test' },
+            to: [{ email: deps.config.defaultFromEmail }],
+            subject: 'unsubscribe',
+            body: 'Thanks for reaching out.',
+            direction: EmailDirection.INBOUND,
+          },
+        ],
+      },
+    ]);
+    const t = thread!;
+    const result = await inboundEmailService(deps, {
+      providerMessageId: t.messages[0]!.providerMessageId,
+      threadId: t.providerThreadId,
+    });
+
+    expect(result.status).toBe('unsubscribed');
+    expect(prisma.suppressionEntry.rows).toHaveLength(1);
+    // Deterministic short-circuit: no classifier run.
+    expect(prisma.agentRun.rows).toHaveLength(0);
+  });
+
+  it('classifier escalates (invalid output): persists an escalated AgentRun', async () => {
+    const prisma = new FakePrisma();
+    seedProspect(prisma);
+    const deps = makeDeps(prisma, { llmProvider: new FailingLlmProvider() });
+    const { threadId, messageId } = preseedThread(deps, 'Some ambiguous message the classifier cannot parse.');
+
+    const result = await inboundEmailService(deps, { providerMessageId: messageId, threadId });
+
+    expect(result.status).toBe('escalated');
+    // The escalation must be observable as a persisted (escalated) AgentRun.
+    const run = prisma.agentRun.rows.find((r) => r.agentType === 'inbound_classifier');
+    expect(run).toBeTruthy();
+    expect(run!.status).toBe('escalated');
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'escalation')).toBe(true);
   });
 
   it('angry/sensitive: escalation ApprovalItem', async () => {

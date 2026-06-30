@@ -20,10 +20,12 @@
  *  10. human approval requirement
  *  11. auto-send
  *
- * Gates 2-9 are HARD gates: any failure means `allowed = false`. The
- * `sending_enabled` switch (gate 1) and gates 10-11 govern *how* an allowed
- * send proceeds (auto vs. human approval) and never themselves set
- * `allowed = false`.
+ * Gates 2-9 are SAFETY gates: any failure means `allowed = false`. The
+ * governance/switch gates `sending_enabled` (gate 1), `human_approval`, and
+ * `auto_send` govern *how* an allowed send proceeds (auto vs. human approval)
+ * and never themselves set `allowed = false`. They drive `canAutoSend` and the
+ * new `canSendWithApproval` (a human-approved send when auto-send is off, still
+ * gated on the master SENDING_ENABLED switch).
  */
 
 import type { ComplianceReview } from '@app/shared';
@@ -186,11 +188,13 @@ export async function runOutboundGates(
       : fail('footer_present', 'unable to ensure unsubscribe footer'),
   );
 
-  // Hard gates determine `allowed`. The `sending_enabled` switch is NOT a hard
-  // gate: with it off the MVP still creates a draft + approval item, it only
-  // forbids automatic sending (enforced via `canAutoSend` below).
-  const hardGatesPassed = decisions.every(
-    (d) => d.gate === 'sending_enabled' || d.passed,
+  // Safety gates determine the real safety verdict (`allowed`). These are ALL
+  // gates EXCEPT the governance/switch gates `sending_enabled`,
+  // `human_approval`, and `auto_send`, which govern *how* a safe send proceeds
+  // (auto vs. human approval) and never themselves set `allowed = false`.
+  const GOVERNANCE_GATES = new Set(['sending_enabled', 'human_approval', 'auto_send']);
+  const safetyGatesPassed = decisions.every(
+    (d) => GOVERNANCE_GATES.has(d.gate) || d.passed,
   );
 
   // --- Gate 9: human approval requirement ---
@@ -203,41 +207,53 @@ export async function runOutboundGates(
     args.systemAutoSendSetting === true &&
     sendingEnabled;
 
-  let requiresApproval: boolean;
-  if (!hardGatesPassed) {
+  const hasHumanApproval = args.hasHumanApproval === true;
+
+  // --- Gate 10: auto-send ---
+  // Cleared for autonomous send: safety gates pass + master switch on + auto-send
+  // permitted.
+  const canAutoSend = safetyGatesPassed && autoSendPermitted && sendingEnabled;
+
+  // Human approval authorizes a send when auto-send is off, but the master
+  // SENDING_ENABLED switch is still required. With sendingEnabled=false this is
+  // always false.
+  const canSendWithApproval =
+    safetyGatesPassed && sendingEnabled === true && hasHumanApproval === true;
+
+  // Safe but not cleared for autonomous send → a human must approve.
+  const requiresApproval = safetyGatesPassed && !canAutoSend;
+
+  // --- Gate 9 decision (human_approval), audited but never blocks `allowed` ---
+  if (!safetyGatesPassed) {
     // Blocked sends don't proceed at all; not an approvable item here.
-    requiresApproval = false;
     decisions.push(fail('human_approval', 'blocked by an earlier gate'));
   } else if (autoSendPermitted) {
-    requiresApproval = false;
     decisions.push(pass('human_approval', 'auto-send permitted; no approval required'));
-  } else if (args.hasHumanApproval === true) {
-    requiresApproval = false;
+  } else if (hasHumanApproval) {
     decisions.push(pass('human_approval', 'human approval present'));
   } else {
-    requiresApproval = true;
     decisions.push(
       fail('human_approval', 'human approval required (auto-send disabled)'),
     );
   }
 
-  // --- Gate 10: auto-send ---
-  const canAutoSend = hardGatesPassed && autoSendPermitted && sendingEnabled;
+  // --- Gate 10 decision (auto_send), audited ---
   decisions.push(
     canAutoSend
       ? pass('auto_send', 'eligible for automatic send')
       : fail(
           'auto_send',
-          hardGatesPassed
+          safetyGatesPassed
             ? 'auto-send disabled; requires human approval'
             : 'blocked by an earlier gate',
         ),
   );
 
   return {
-    allowed: hardGatesPassed,
+    allowed: safetyGatesPassed,
     decisions,
     requiresApproval,
     canAutoSend,
+    canSendWithApproval,
   };
 }

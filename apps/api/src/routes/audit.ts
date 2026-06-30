@@ -7,11 +7,10 @@ import { listAuditLogs } from '../services.js';
 export function registerAuditRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.get('/audit-logs', async (req) => {
     const { entityType, limit } = req.query as { entityType?: string; limit?: string };
-    const parsedLimit = limit ? Number.parseInt(limit, 10) : 100;
-    return listAuditLogs(
-      ctx.prisma,
-      entityType,
-      Number.isFinite(parsedLimit) ? parsedLimit : 100,
-    );
+    const parsed = limit ? Number.parseInt(limit, 10) : NaN;
+    // Only accept positive integers; clamp to a sane ceiling, else default 100.
+    const safeLimit =
+      Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, 1000) : 100;
+    return listAuditLogs(ctx.prisma, entityType, safeLimit);
   });
 }

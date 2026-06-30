@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function InboundPage() {
   const res = await read<unknown>('/threads');
-  const threads = res.ok ? asArray<EmailThread>(res.data) : [];
+  const threads = res.ok ? asArray<EmailThread>(res.data) : null;
+  const invalidShape = res.ok && threads === null;
 
   return (
     <div>
@@ -30,6 +31,8 @@ export default async function InboundPage() {
         </div>
         {!res.ok ? (
           <ApiUnreachable error={res.error} />
+        ) : invalidShape || threads === null ? (
+          <ApiUnreachable error="Unexpected response shape from /threads." />
         ) : threads.length === 0 ? (
           <p className="muted">No threads yet. Simulate one above.</p>
         ) : (
@@ -49,7 +52,15 @@ export default async function InboundPage() {
                 <tr key={t.id}>
                   <td>{t.subject ?? '(no subject)'}</td>
                   <td>{t.classification ? <span className="badge">{t.classification}</span> : '—'}</td>
-                  <td>{t.requiresHuman ? <span className="badge">yes</span> : 'no'}</td>
+                  <td>
+                    {t.requiresHuman === true ? (
+                      <span className="badge">yes</span>
+                    ) : t.requiresHuman === false ? (
+                      'no'
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                   <td>{t.messages?.length ?? '—'}</td>
                   <td>{fmtDate(t.createdAt)}</td>
                   <td>

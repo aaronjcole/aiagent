@@ -23,8 +23,15 @@ export function prospectName(p: {
   return joined || p.email;
 }
 
-/** Tolerantly extract an array from common API envelope shapes. */
-export function asArray<T>(data: unknown): T[] {
+/**
+ * Tolerantly extract an array from common API envelope shapes.
+ *
+ * Returns the array on success (including a genuinely empty `[]`), or `null`
+ * when the shape is malformed/unexpected (e.g. an `{ error }` envelope or a
+ * non-array primitive) so callers can distinguish a contract failure from a
+ * real empty list and render an error state instead of empty-state copy.
+ */
+export function asArray<T>(data: unknown): T[] | null {
   if (Array.isArray(data)) return data as T[];
   if (data && typeof data === 'object') {
     for (const key of ['data', 'items', 'results', 'rows']) {
@@ -32,5 +39,5 @@ export function asArray<T>(data: unknown): T[] {
       if (Array.isArray(v)) return v as T[];
     }
   }
-  return [];
+  return null;
 }

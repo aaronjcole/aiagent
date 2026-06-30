@@ -43,6 +43,7 @@ import {
 import type { EmailThreadDTO } from '@app/email';
 import type { Deps } from '../deps.js';
 import { proposeCalendarEvent } from './calendar.js';
+import { isValidIanaTimezone } from './tz.js';
 import { persistAgentRun, toJson, writeAudit } from './shared.js';
 
 export interface InboundEmailInput {
@@ -121,7 +122,9 @@ export async function inboundEmailService(
   const fromEmail = inboundMsg.from.email;
 
   // --- DETERMINISTIC unsubscribe check FIRST (never LLM-overridable) ---
-  const unsub = classifyUnsubscribe(bodyText);
+  // Pass the subject too so a subject-line opt-out (e.g. "Subject: unsubscribe")
+  // is caught, not just body phrases.
+  const unsub = classifyUnsubscribe({ body: bodyText, subject });
   if (unsub.isUnsubscribe) {
     return suppressAndConfirm(deps, {
       threadRowId,
@@ -147,6 +150,18 @@ export async function inboundEmailService(
     classifyMeta = result.meta;
   } catch (err) {
     if (err instanceof EscalationError) {
+      // The classifier escalated WITHOUT reaching the success path, so no
+      // AgentRun was persisted yet. Persist an escalated run here so the
+      // escalation is observable (escalateInbound skips it for the classifier to
+      // avoid a duplicate when a SUCCEEDED run already exists).
+      await persistAgentRun(deps, {
+        agentType: AgentType.INBOUND_CLASSIFIER,
+        status: AgentRunStatus.ESCALATED,
+        prospectId,
+        threadId: threadRowId,
+        inputPayload: { subject, fromEmail },
+        validationErrors: err.details ?? { message: err.message },
+      });
       return escalateInbound(deps, {
         threadRowId,
         messageRowId: inboundMsg.persistedId,
@@ -183,7 +198,21 @@ export async function inboundEmailService(
   // --- Exhaustive branch over the inbound category ---
   const category = classification.category;
   switch (category) {
-    case 'interested_schedule':
+    case 'interested_schedule': {
+      // Only high-confidence, non-sensitive scheduling replies proceed to the
+      // automated scheduling flow. If the classifier wants a human or is
+      // low-confidence, escalate (same pattern as the other categories) rather
+      // than auto-drafting / proposing a meeting.
+      if (classification.requiresHuman || classification.confidence < LOW_CONFIDENCE) {
+        return escalateInbound(deps, {
+          threadRowId,
+          messageRowId: inboundMsg.persistedId,
+          prospectId,
+          category,
+          reason: classification.reasons.join('; ') || `low-confidence scheduling (${classification.confidence})`,
+          agentType: AgentType.INBOUND_CLASSIFIER,
+        });
+      }
       return handleScheduling(deps, {
         threadRowId,
         messageRowId: inboundMsg.persistedId,
@@ -192,6 +221,7 @@ export async function inboundEmailService(
         inboundMsg,
         classification,
       });
+    }
 
     case 'unsubscribe':
       // Defense in depth: classifier says unsubscribe even though the
@@ -467,8 +497,12 @@ async function handleScheduling(
     parsedOutput: extraction,
   });
 
-  // --- Ambiguous timezone / needs clarification → clarification draft, NO event ---
-  if (extraction.timezoneAmbiguous || extraction.needsClarification || !extraction.timezone) {
+  // --- Ambiguous / absent / INVALID timezone, or needs clarification →
+  // clarification draft, NO event. A non-IANA tz must never reach availability
+  // or event creation (the provider builds an Intl.DateTimeFormat and would
+  // throw a RangeError on a bad zone). ---
+  const tzInvalid = !extraction.timezone || !isValidIanaTimezone(extraction.timezone);
+  if (extraction.timezoneAmbiguous || extraction.needsClarification || tzInvalid) {
     const draftId = await draftSchedulingDraft(deps, {
       threadRowId: args.threadRowId,
       prospectId: args.prospectId,
@@ -487,7 +521,11 @@ async function handleScheduling(
       entityId: args.messageRowId,
       decision: 'clarify',
       allowed: true,
-      reason: extraction.timezoneAmbiguous ? 'timezone ambiguous' : 'needs clarification',
+      reason: extraction.timezoneAmbiguous
+        ? 'timezone ambiguous'
+        : tzInvalid
+          ? 'timezone absent or invalid'
+          : 'needs clarification',
       metadata: { draftId },
     });
 
@@ -500,8 +538,8 @@ async function handleScheduling(
     };
   }
 
-  // --- Timezone known → check availability ---
-  const timezone = extraction.timezone;
+  // --- Timezone known + valid (guard above returned otherwise) → availability ---
+  const timezone: string = extraction.timezone as string;
   const durationMinutes = extraction.durationMinutes ?? 30;
   const rangeStart = new Date(deps.clock().getTime() + 24 * 60 * 60 * 1000);
   const rangeEnd = new Date(rangeStart.getTime() + 7 * 24 * 60 * 60 * 1000);

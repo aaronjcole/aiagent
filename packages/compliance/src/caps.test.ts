@@ -8,6 +8,7 @@ const config: SendingCapConfig = {
   perInboxDailyCap: 50,
   perDomainDailyCap: 10,
   sequenceMaxSteps: 5,
+  perProspectMaxSends: 5,
 };
 
 const baseInput = {
@@ -28,7 +29,36 @@ describe('checkSendingCaps', () => {
     const r = await checkSendingCaps(repo, config, baseInput);
     expect(r.allowed).toBe(true);
     expect(r.reasons).toEqual([]);
-    expect(r.counts).toEqual({ global: 10, inbox: 5, domain: 2, sequenceSteps: 1 });
+    expect(r.counts).toEqual({
+      global: 10,
+      inbox: 5,
+      domain: 2,
+      sequenceSteps: 1,
+      prospectTotal: 0,
+    });
+  });
+
+  it('allows when per-prospect lifetime sends are within the cap', async () => {
+    const repo = new FakeSendCountRepo({ prospectTotal: { pros_1: 4 } });
+    const r = await checkSendingCaps(repo, config, baseInput);
+    expect(r.allowed).toBe(true);
+    expect(r.reasons).toEqual([]);
+    expect(r.counts.prospectTotal).toBe(4);
+  });
+
+  it('triggers the per-prospect lifetime cap independently (prospect_cap)', async () => {
+    const repo = new FakeSendCountRepo({ prospectTotal: { pros_1: 5 } });
+    const r = await checkSendingCaps(repo, config, baseInput);
+    expect(r.allowed).toBe(false);
+    expect(r.reasons.some((x) => x.includes('prospect_cap'))).toBe(true);
+    expect(r.reasons.some((x) => x.includes('global'))).toBe(false);
+  });
+
+  it('treats a per-prospect cap of <= 0 as unlimited', async () => {
+    const repo = new FakeSendCountRepo({ prospectTotal: { pros_1: 9999 } });
+    const r = await checkSendingCaps(repo, { ...config, perProspectMaxSends: 0 }, baseInput);
+    expect(r.allowed).toBe(true);
+    expect(r.reasons.some((x) => x.includes('prospect_cap'))).toBe(false);
   });
 
   it('triggers ONLY the global cap reason when global is exceeded', async () => {

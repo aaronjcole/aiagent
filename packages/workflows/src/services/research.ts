@@ -74,11 +74,14 @@ export async function researchProspectService(
     data: { status: ProspectStatus.RESEARCHING },
   });
 
-  // --- Gather raw research context (no LLM) ---
-  const researchInput = await gatherResearchContext(deps, prospect);
-
-  // --- Run the research agent (RECOMMENDS only) ---
+  // --- Gather context + run the research agent inside one guard ---
+  // `gatherResearchContext` does provider I/O (enrichment / web search) which can
+  // also fail; keeping it inside the try means a provider/Prisma failure flips the
+  // prospect to NEEDS_REVIEW (with a `research.failed` audit) instead of pinning
+  // it in RESEARCHING with no record.
+  let researchInput: ResearchInput | undefined;
   try {
+    researchInput = await gatherResearchContext(deps, prospect);
     const { output, meta } = await researchProspect(researchInput, deps.llmClient);
 
     const agentRun = await persistAgentRun(deps, {
@@ -156,8 +159,24 @@ export async function researchProspectService(
     };
   } catch (err) {
     if (err instanceof EscalationError) {
-      return handleResearchEscalation(deps, prospectId, researchInput, err);
+      return handleResearchEscalation(deps, prospectId, researchInput ?? { prospect: { email: prospect.email } }, err);
     }
+    // Non-escalation terminal failure (provider/Prisma error): don't leave the
+    // prospect stuck in RESEARCHING. Flag NEEDS_REVIEW + audit, then rethrow so
+    // the failure is visible (and dead-lettered at the workflow layer).
+    await deps.prisma.prospect.update({
+      where: { id: prospectId },
+      data: { status: ProspectStatus.NEEDS_REVIEW },
+    });
+    await writeAudit(deps, {
+      action: 'research.failed',
+      actorType: ActorType.SYSTEM,
+      entityType: ENTITY,
+      entityId: prospectId,
+      decision: 'failed',
+      allowed: false,
+      reason: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   }
 }
@@ -176,12 +195,14 @@ async function gatherResearchContext(
   const name = [prospect.firstName, prospect.lastName].filter(Boolean).join(' ').trim() || undefined;
   const domain = prospect.company?.domain ?? prospect.email.split('@')[1];
 
+  // Skip the web search entirely when we have no meaningful query terms (an
+  // all-empty query would otherwise hit the provider with a blank string).
+  const webQuery = [name, prospect.company?.name ?? domain].filter(Boolean).join(' ').trim();
+
   const [companyEnrich, personEnrich, webHits] = await Promise.all([
     domain ? deps.research.enrichCompany(domain) : Promise.resolve(null),
     deps.research.enrichPerson({ email: prospect.email, name }),
-    deps.research.searchWeb(
-      [name, prospect.company?.name ?? domain].filter(Boolean).join(' '),
-    ),
+    webQuery ? deps.research.searchWeb(webQuery) : Promise.resolve([]),
   ]);
 
   const signals = [

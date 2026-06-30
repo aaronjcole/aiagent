@@ -50,5 +50,10 @@ RUN corepack enable
 # `prisma migrate deploy` at startup.
 COPY --from=builder /app /app
 
+# Drop root: run as the built-in unprivileged `node` user. Ensure it can read
+# the workspace and corepack's PNPM_HOME (for the runtime Prisma CLI).
+RUN chown -R node:node /app "$PNPM_HOME"
+USER node
+
 EXPOSE 3001
 CMD ["node", "apps/api/dist/index.js"]

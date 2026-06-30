@@ -2,7 +2,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { SuppressionReason } from '@app/shared';
+import { SuppressionReason } from '@app/db';
 import type { AppContext } from '../context.js';
 import {
   addSuppressionEntry,
@@ -14,16 +14,7 @@ const AddBody = z
   .object({
     email: z.string().email().optional(),
     domain: z.string().optional(),
-    reason: z
-      .enum([
-        SuppressionReason.UNSUBSCRIBE,
-        SuppressionReason.BOUNCE,
-        SuppressionReason.COMPLAINT,
-        SuppressionReason.MANUAL,
-        SuppressionReason.GLOBAL_BLOCK,
-        SuppressionReason.COMPETITOR,
-      ])
-      .optional(),
+    reason: z.nativeEnum(SuppressionReason).optional(),
     notes: z.string().optional(),
   })
   .refine((b) => Boolean(b.email || b.domain), {

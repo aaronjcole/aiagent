@@ -14,6 +14,7 @@ import {
 } from '@app/shared';
 import type { Deps } from '../deps.js';
 import { toJson, writeAudit } from './shared.js';
+import { isValidIanaTimezone } from './tz.js';
 
 /** A confirmed slot the recipient explicitly selected. */
 export interface ConfirmedSlot {
@@ -122,6 +123,9 @@ function checkGuards(input: ConfirmAndCreateInput): string | null {
   if (!input.recipientConfirmed) return 'recipient has not confirmed a slot';
   if (!input.selectedSlot) return 'no selected slot';
   if (!input.timezone) return 'timezone unknown';
+  // A non-IANA / invalid timezone must never reach the provider (which builds an
+  // Intl.DateTimeFormat and throws RangeError). Treat it as a blocked guard.
+  if (!isValidIanaTimezone(input.timezone)) return 'invalid IANA timezone';
   if (!input.availabilityChecked) return 'availability not checked';
   if (!input.idempotencyKey) return 'missing idempotency key';
   const { startIso, endIso } = input.selectedSlot;

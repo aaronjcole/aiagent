@@ -15,6 +15,7 @@ export {
   researchProspectWorkflow,
   outboundSequenceWorkflow,
   inboundEmailWorkflow,
+  sendApprovedDraftWorkflow,
 } from './workflows.js';
 
 // --- Activities (thin side-effecting layer) ---
@@ -23,6 +24,8 @@ export {
   outboundSequenceActivity,
   inboundEmailActivity,
   confirmCalendarEventActivity,
+  sendApprovedDraftActivity,
+  recordTerminalFailureActivity,
   setActivityDeps,
   type Activities,
 } from './activities.js';
@@ -68,4 +71,5 @@ export const workflowIds = {
   research: (prospectId: string): string => `research-${prospectId}`,
   outbound: (prospectId: string, sequenceId: string): string => `outbound-${prospectId}-${sequenceId}`,
   inbound: (key: string): string => `inbound-${key}`,
+  sendDraft: (draftId: string): string => `send-draft-${draftId}`,
 } as const;

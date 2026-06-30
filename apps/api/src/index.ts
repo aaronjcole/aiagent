@@ -12,11 +12,21 @@ async function main(): Promise<void> {
   const ctx = createAppContext();
   const app = buildServer(ctx);
 
+  let shuttingDown = false;
   const close = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     ctx.logger.info({ signal }, 'shutting down API');
-    await app.close();
-    await ctx.close();
-    process.exit(0);
+    try {
+      await app.close();
+      await ctx.close();
+      process.exitCode = 0;
+    } catch (err) {
+      ctx.logger.error({ err, signal }, 'error during shutdown');
+      process.exitCode = 1;
+    } finally {
+      process.exit();
+    }
   };
   process.on('SIGINT', () => void close('SIGINT'));
   process.on('SIGTERM', () => void close('SIGTERM'));

@@ -18,21 +18,21 @@ export default async function DashboardPage() {
   const anyFailed = [prospects, approvals, drafts, suppression, audit].find((r) => !r.ok);
 
   const cards: ReadonlyArray<{ label: string; href: string; count: number | null }> = [
-    { label: 'Prospects', href: '/prospects', count: prospects.ok ? asArray<Prospect>(prospects.data).length : null },
+    { label: 'Prospects', href: '/prospects', count: prospects.ok ? (asArray<Prospect>(prospects.data)?.length ?? null) : null },
     {
       label: 'Pending approvals',
       href: '/approvals',
-      count: approvals.ok ? asArray<ApprovalItem>(approvals.data).length : null,
+      count: approvals.ok ? (asArray<ApprovalItem>(approvals.data)?.length ?? null) : null,
     },
-    { label: 'Drafts', href: '/drafts', count: drafts.ok ? asArray<DraftEmail>(drafts.data).length : null },
+    { label: 'Drafts', href: '/drafts', count: drafts.ok ? (asArray<DraftEmail>(drafts.data)?.length ?? null) : null },
     {
       label: 'Suppression entries',
       href: '/suppression',
-      count: suppression.ok ? asArray<SuppressionEntry>(suppression.data).length : null,
+      count: suppression.ok ? (asArray<SuppressionEntry>(suppression.data)?.length ?? null) : null,
     },
   ];
 
-  const recentLogs = audit.ok ? asArray<AuditLog>(audit.data).slice(0, 5) : [];
+  const recentLogs = audit.ok ? (asArray<AuditLog>(audit.data)?.slice(0, 5) ?? []) : [];
 
   return (
     <div>
@@ -74,7 +74,15 @@ export default async function DashboardPage() {
                     {log.entityId ? <span className="muted"> · {log.entityId}</span> : null}
                   </td>
                   <td>{log.action ?? '—'}</td>
-                  <td>{log.allowed === false ? <span className="badge">blocked</span> : '✓'}</td>
+                  <td>
+                    {log.allowed === false ? (
+                      <span className="badge">blocked</span>
+                    ) : log.allowed === true ? (
+                      '✓'
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

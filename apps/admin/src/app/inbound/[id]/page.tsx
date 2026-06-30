@@ -19,7 +19,7 @@ export default async function ThreadDetailPage({ params }: { params: { id: strin
   }
 
   const t = res.data;
-  const messages = asArray<EmailMessage>(t.messages ?? []);
+  const messages = asArray<EmailMessage>(t.messages ?? []) ?? [];
 
   return (
     <div>

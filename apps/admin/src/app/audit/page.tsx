@@ -20,9 +20,12 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
     limit,
   });
 
-  let logs = res.ok ? asArray<AuditLog>(res.data) : [];
+  const rawLogs = res.ok ? asArray<AuditLog>(res.data) : null;
+  // A null sentinel means the API returned an unexpected shape — treat it like
+  // a load failure rather than an empty list.
+  const invalidShape = res.ok && rawLogs === null;
   // Newest first (defensive sort in case the API does not guarantee ordering).
-  logs = [...logs].sort((a, b) => {
+  const logs = [...(rawLogs ?? [])].sort((a, b) => {
     const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
     const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
     return tb - ta;
@@ -38,6 +41,8 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
 
       {!res.ok ? (
         <ApiUnreachable error={res.error} />
+      ) : invalidShape ? (
+        <ApiUnreachable error="Unexpected response shape from /audit-logs." />
       ) : logs.length === 0 ? (
         <p className="muted">No audit logs{entityType ? ` for entity type “${entityType}”` : ''}.</p>
       ) : (
@@ -62,7 +67,15 @@ export default async function AuditPage({ searchParams }: { searchParams: Search
                 </td>
                 <td>{log.action ?? '—'}</td>
                 <td>{log.actor ?? log.actorType ?? '—'}</td>
-                <td>{log.allowed === false ? <span className="badge">blocked</span> : '✓'}</td>
+                <td>
+                  {log.allowed === false ? (
+                    <span className="badge">blocked</span>
+                  ) : log.allowed === true ? (
+                    '✓'
+                  ) : (
+                    '—'
+                  )}
+                </td>
                 <td>{log.reason ?? '—'}</td>
               </tr>
             ))}

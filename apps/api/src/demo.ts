@@ -82,7 +82,10 @@ async function ensureProspect(): Promise<{ id: string; email: string }> {
 
 async function getSequenceId(prospectId: string): Promise<string> {
   // Prefer the seeded "Default Outbound"; otherwise create a minimal sequence.
-  const existing = await prisma.outreachSequence.findFirst({ orderBy: { createdAt: 'asc' } });
+  const existing = await prisma.outreachSequence.findFirst({
+    where: { prospectId },
+    orderBy: { createdAt: 'asc' },
+  });
   if (existing) return existing.id;
   const created = await prisma.outreachSequence.create({
     data: { name: 'Demo Sequence', prospectId, status: 'active', maxSteps: 3 },

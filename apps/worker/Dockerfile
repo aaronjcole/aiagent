@@ -37,6 +37,9 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=node:node /app /app
+
+# Run as the unprivileged bundled `node` user instead of root.
+USER node
 
 CMD ["node", "apps/worker/dist/index.js"]

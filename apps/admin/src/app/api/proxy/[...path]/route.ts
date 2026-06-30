@@ -22,12 +22,16 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
     body = await req.text();
   }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
   try {
     const res = await fetch(target, {
       method,
       headers: body ? { 'content-type': 'application/json' } : undefined,
       body: body || undefined,
       cache: 'no-store',
+      signal: controller.signal,
     });
     const text = await res.text();
     return new NextResponse(text, {
@@ -36,10 +40,15 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
     });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
-    return NextResponse.json(
-      { error: `Could not reach API at ${API_BASE_URL}: ${message}` },
-      { status: 502 },
-    );
+    // Log the concrete upstream target server-side; never leak it to the client.
+    if (cause instanceof Error && cause.name === 'AbortError') {
+      console.error(`[proxy] upstream request to ${target} timed out after 15s`);
+      return NextResponse.json({ error: 'Upstream API timed out.' }, { status: 504 });
+    }
+    console.error(`[proxy] could not reach upstream API at ${target}: ${message}`);
+    return NextResponse.json({ error: 'Could not reach the API.' }, { status: 502 });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

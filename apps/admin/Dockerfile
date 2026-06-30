@@ -38,7 +38,10 @@ ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN corepack enable
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=node:node /app /app
+
+# Run as the unprivileged bundled `node` user instead of root.
+USER node
 
 EXPOSE 3000
 CMD ["pnpm", "--filter", "@app/admin", "start"]

@@ -111,6 +111,11 @@ enum ActorType {
   provider
 }
 
+enum DeadLetterStatus {
+  open
+  resolved
+}
+
 // ---------------------------------------------------------------------------
 // Core entities
 // ---------------------------------------------------------------------------
@@ -473,4 +478,24 @@ model IdempotencyKey {
   createdAt DateTime @default(now())
 
   @@index([scope])
+}
+
+// ---------------------------------------------------------------------------
+// Dead-letter (durable record of terminal workflow failures)
+// ---------------------------------------------------------------------------
+
+model DeadLetter {
+  id            String           @id @default(cuid())
+  workflowType  String
+  workflowId    String?
+  // The workflow input that produced the terminal failure.
+  input         Json
+  error         String
+  // Redacted stack/details (never raw secrets/PII).
+  stackRedacted String?
+  status        DeadLetterStatus @default(open)
+  createdAt     DateTime         @default(now())
+  resolvedAt    DateTime?
+
+  @@index([status, createdAt])
 }

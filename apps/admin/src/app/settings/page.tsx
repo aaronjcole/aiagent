@@ -35,7 +35,7 @@ export default async function SettingsPage() {
     );
   }
 
-  const settings = asArray<SystemSetting>(res.data);
+  const settings = asArray<SystemSetting>(res.data) ?? [];
   const autoSend = settings.find((s) => s.key === AUTO_SEND_KEY);
   const autoSendOn = isTruthy(autoSend?.value);
 

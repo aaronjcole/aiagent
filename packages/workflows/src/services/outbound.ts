@@ -80,7 +80,24 @@ export async function outboundSequenceService(
   const sequence = await deps.prisma.outreachSequence.findUnique({
     where: { id: sequenceId },
   });
-  const currentStep = sequence?.currentStep ?? 0;
+  // The sequence must exist AND belong to this prospect. A missing or
+  // mismatched sequence is ineligible — never fall through to `currentStep = 0`
+  // (which would silently treat it as a brand-new sequence for this prospect).
+  if (!sequence || sequence.prospectId !== prospectId) {
+    const reason = sequence
+      ? 'sequence does not belong to prospect'
+      : 'sequence not found';
+    await writeAudit(deps, {
+      action: 'outbound.sequence_not_found',
+      entityType: ENTITY,
+      entityId: prospectId,
+      allowed: false,
+      reason,
+      metadata: { sequenceId },
+    });
+    return { status: 'ineligible', prospectId, sequenceId, reasons: [reason] };
+  }
+  const currentStep = sequence.currentStep ?? 0;
   const stepNumber = currentStep + 1;
 
   const research = await deps.prisma.researchResult.findFirst({
@@ -94,6 +111,9 @@ export async function outboundSequenceService(
 
   const suppressionResult = await checkSuppression(suppressionRepo, {
     email: prospect.email,
+    // Also check the recipient domain so a domain-suppressed prospect is blocked
+    // up front (before any LLM drafting), not just on the later gate.
+    domain: prospect.email?.split('@')[1]?.toLowerCase(),
   });
   const replyHistory: ReplyHistorySnapshot = {
     unsubscribed: await replyHistoryRepo.hasUnsubscribed(prospectId),
@@ -231,7 +251,7 @@ export async function outboundSequenceService(
     fromEmail: deps.config.defaultFromEmail,
     prospectId,
     sequenceId,
-    sequenceMaxSteps: sequence?.maxSteps ?? deps.config.sequenceMaxSteps,
+    sequenceMaxSteps: sequence.maxSteps ?? deps.config.sequenceMaxSteps,
     replyHistory,
     body: bodyWithFooter,
     complianceReview,
@@ -242,6 +262,7 @@ export async function outboundSequenceService(
       perInboxDailyCap: deps.config.perInboxDailyCap,
       perDomainDailyCap: deps.config.perDomainDailyCap,
       sequenceMaxSteps: deps.config.sequenceMaxSteps,
+      perProspectMaxSends: deps.config.perProspectMaxSends,
     },
     footerConfig: {
       unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl,
@@ -301,6 +322,13 @@ export async function outboundSequenceService(
     },
   });
 
+  // Short-circuit: this draft was already SENT on a prior run (e.g. a workflow
+  // retry replaying after the send + status update committed). Return the sent
+  // result WITHOUT calling sendMessage again — prevents a duplicate send.
+  if (draftRow.status === DraftStatus.SENT) {
+    return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
+  }
+
   // --- Auto-send vs. approval ---
   // Defense-in-depth: even though `canAutoSend` already accounts for the master
   // kill switch, re-check `config.sendingEnabled` at the actual send site so a
@@ -344,25 +372,37 @@ export async function outboundSequenceService(
     return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
   }
 
-  // Default path: create an approval item and wait for a human.
-  const approval = await deps.prisma.approvalItem.create({
-    data: {
+  // Default path: surface a human-review approval item and wait. Reuse an
+  // existing PENDING OUTREACH_SEND item for this draft if one already exists
+  // (e.g. a workflow rerun) so we never queue duplicate review entries.
+  const existingApproval = await deps.prisma.approvalItem.findFirst({
+    where: {
+      draftId: draftRow.id,
       type: ApprovalType.OUTREACH_SEND,
       status: ApprovalStatus.PENDING,
-      prospectId,
-      draftId: draftRow.id,
-      payload: toJson({
-        subject: draft.subject,
-        body: bodyWithFooter,
-        complianceDecision: complianceReview.decision,
-        gateDecisions: gateResult.decisions,
-      }) as object,
-      reason: gateResult.allowed
-        ? 'auto-send disabled; human approval required'
-        : 'blocked by a hard gate; human review required',
     },
     select: { id: true },
   });
+  const approval =
+    existingApproval ??
+    (await deps.prisma.approvalItem.create({
+      data: {
+        type: ApprovalType.OUTREACH_SEND,
+        status: ApprovalStatus.PENDING,
+        prospectId,
+        draftId: draftRow.id,
+        payload: toJson({
+          subject: draft.subject,
+          body: bodyWithFooter,
+          complianceDecision: complianceReview.decision,
+          gateDecisions: gateResult.decisions,
+        }) as object,
+        reason: gateResult.allowed
+          ? 'auto-send disabled; human approval required'
+          : 'blocked by a hard gate; human review required',
+      },
+      select: { id: true },
+    }));
 
   await writeAudit(deps, {
     action: 'draft.created',

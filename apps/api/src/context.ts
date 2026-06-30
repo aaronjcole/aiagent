@@ -46,10 +46,16 @@ export function createAppContext(): AppContext {
 
   async function getTemporalClient(): Promise<Client> {
     if (!clientPromise) {
-      clientPromise = (async () => {
+      const pending = (async () => {
         connection = await Connection.connect({ address: config.temporalAddress });
         return new Client({ connection });
       })();
+      // Don't cache a rejected init: clear the memo on failure so the next call
+      // retries instead of permanently returning the same rejected promise.
+      pending.catch(() => {
+        if (clientPromise === pending) clientPromise = undefined;
+      });
+      clientPromise = pending;
     }
     return clientPromise;
   }
@@ -58,7 +64,12 @@ export function createAppContext(): AppContext {
     if (!depsPromise) {
       // Reuse the shared prisma singleton + this context's config/logger so the
       // mock email provider is a single shared instance.
-      depsPromise = createDeps({ config, logger, prisma });
+      const pending = createDeps({ config, logger, prisma });
+      // Don't cache a rejected init (see getTemporalClient).
+      pending.catch(() => {
+        if (depsPromise === pending) depsPromise = undefined;
+      });
+      depsPromise = pending;
     }
     return depsPromise;
   }

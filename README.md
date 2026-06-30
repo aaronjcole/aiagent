@@ -35,7 +35,7 @@ as an `AgentRun` for observability, and then **deterministic gates** decide what
 
 ## Architecture
 
-```
+```text
                             ┌──────────────────────────────────────────┐
                             │                  apps/                    │
                             │                                           │

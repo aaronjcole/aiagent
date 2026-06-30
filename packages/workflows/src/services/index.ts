@@ -25,6 +25,23 @@ export {
 } from './inbound.js';
 
 export {
+  sendApprovedDraft,
+  type SendApprovedDraftInput,
+  type SendApprovedDraftResult,
+  type SendApprovedDraftOutcome,
+} from './send.js';
+
+export {
+  recordTerminalFailure,
+  type RecordTerminalFailureInput,
+  type RecordTerminalFailureResult,
+} from './dead-letter.js';
+
+export {
+  isValidIanaTimezone,
+} from './tz.js';
+
+export {
   confirmAndCreateCalendarEvent,
   proposeCalendarEvent,
   type ConfirmAndCreateInput,

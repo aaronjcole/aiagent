@@ -124,13 +124,31 @@ function matchesBareStop(normalized: string): boolean {
  *
  * Case-insensitive, punctuation- and whitespace-tolerant. Returns the canonical
  * matched phrase for auditing.
+ *
+ * Accepts either a plain string (treated as the body) or an
+ * `{ body, subject? }` object. When given an object, the SAME deterministic
+ * detection runs over BOTH the subject and the body — an opt-out in either is
+ * detected. (This scans inbound opt-out signals only; it does NOT implement
+ * List-Unsubscribe header logic, which is an outbound footer mechanism.)
  */
-export function classifyUnsubscribe(text: string): UnsubscribeResult {
-  if (typeof text !== 'string' || text.trim().length === 0) {
+export function classifyUnsubscribe(
+  input: string | { body: string; subject?: string },
+): UnsubscribeResult {
+  const body = typeof input === 'string' ? input : input.body;
+  const subject = typeof input === 'string' ? undefined : input.subject;
+
+  // Concatenate subject + body so a single normalized scan covers both. A
+  // separator that normalizes to whitespace prevents accidental cross-boundary
+  // matches (e.g. subject ending mid-phrase, body starting mid-phrase).
+  const combined = [subject, body]
+    .filter((s): s is string => typeof s === 'string')
+    .join('\n');
+
+  if (combined.trim().length === 0) {
     return { isUnsubscribe: false, matchedPhrase: null };
   }
 
-  const normalized = normalize(text);
+  const normalized = normalize(combined);
 
   for (const pattern of PATTERNS) {
     if (pattern.test.test(normalized)) {

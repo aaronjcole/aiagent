@@ -68,6 +68,36 @@ describe('confirmAndCreateCalendarEvent', () => {
     const r2 = await confirmAndCreateCalendarEvent(deps, input);
     expect(r2.providerEventId).toBe(r1.providerEventId);
   });
+
+  it('blocks an invalid IANA timezone (never reaches the provider)', async () => {
+    const prisma = new FakePrisma();
+    const deps = makeDeps(prisma);
+    const { calendarEventId } = await proposeCalendarEvent(deps, {
+      prospectId: 'p1',
+      title: 'Intro',
+      timezone: 'UTC',
+      proposedSlots: [SLOT],
+      attendees: [{ email: 'jane@acme.test' }],
+      idempotencyKey: idempotencyKey(['thr_bad', 'propose']),
+    });
+
+    const result = await confirmAndCreateCalendarEvent(deps, {
+      calendarEventId,
+      recipientConfirmed: true,
+      selectedSlot: SLOT,
+      // A non-IANA zone: would throw RangeError inside the provider.
+      timezone: 'Not/AZone',
+      availabilityChecked: true,
+      idempotencyKey: idempotencyKey(['thr_bad', 'confirm']),
+      title: 'Intro',
+      attendees: [{ email: 'jane@acme.test' }],
+    });
+
+    expect(result.created).toBe(false);
+    expect(result.reason).toContain('invalid IANA timezone');
+    expect(prisma.calendarEvent.rows[0]!.status).toBe('proposed');
+    expect(prisma.auditLog.rows.some((a) => a.action === 'calendar.create_blocked')).toBe(true);
+  });
 });
 
 describe('proposeCalendarEvent', () => {

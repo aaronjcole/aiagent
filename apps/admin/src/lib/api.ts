@@ -79,15 +79,20 @@ export async function read<T>(path: string, query?: RequestOptions['query']): Pr
     const data = await request<T>(path, { query });
     return { ok: true, data };
   } catch (err) {
-    const error =
-      err instanceof ApiError
-        ? err.status === 0
-          ? err.message
-          : `${err.message}${err.body ? `: ${err.body.slice(0, 300)}` : ''}`
-        : err instanceof Error
-          ? err.message
-          : 'Unknown error';
-    return { ok: false, error };
+    // Network failures (status 0) keep their message so the UI can hint that
+    // the API is unreachable. For all other failures we log the detailed
+    // upstream body server-side and return a generic message — raw upstream
+    // bodies must not be surfaced to the client.
+    if (err instanceof ApiError) {
+      if (err.status === 0) {
+        return { ok: false, error: err.message };
+      }
+      console.error(`[api] ${err.message}${err.body ? `: ${err.body.slice(0, 1000)}` : ''}`);
+      return { ok: false, error: err.message };
+    }
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`[api] read(${path}) failed: ${message}`);
+    return { ok: false, error: 'Could not load data from the API.' };
   }
 }
 

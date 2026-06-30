@@ -116,3 +116,9 @@ export const ActorType = {
   PROVIDER: 'provider',
 } as const;
 export type ActorType = ValueOf<typeof ActorType>;
+
+export const DeadLetterStatus = {
+  OPEN: 'open',
+  RESOLVED: 'resolved',
+} as const;
+export type DeadLetterStatus = ValueOf<typeof DeadLetterStatus>;

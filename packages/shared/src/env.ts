@@ -61,6 +61,8 @@ export const ConfigSchema = z.object({
   perInboxDailyCap: intFromString(50),
   perDomainDailyCap: intFromString(10),
   sequenceMaxSteps: intFromString(5),
+  // Per-prospect lifetime (all-time, all-sequence) send cap. <= 0 means unlimited.
+  perProspectMaxSends: intFromString(5),
 
   // Sender identity / compliance footer
   defaultFromEmail: z.string().default('outreach@example.com'),
@@ -126,6 +128,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     perInboxDailyCap: env.PER_INBOX_DAILY_CAP,
     perDomainDailyCap: env.PER_DOMAIN_DAILY_CAP,
     sequenceMaxSteps: env.SEQUENCE_MAX_STEPS,
+    perProspectMaxSends: env.PER_PROSPECT_MAX_SENDS,
 
     defaultFromEmail: env.DEFAULT_FROM_EMAIL,
     defaultFromName: env.DEFAULT_FROM_NAME,

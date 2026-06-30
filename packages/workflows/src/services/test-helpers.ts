@@ -51,6 +51,7 @@ export class FakePrisma {
   agentRun = new Table<Row>();
   auditLog = new Table<Row>();
   systemSetting = new Table<Row>();
+  deadLetter = new Table<Row>();
 
   /** Expose Prisma-delegate-shaped objects. */
   get client(): Record<string, unknown> {
@@ -68,6 +69,7 @@ export class FakePrisma {
       agentRun: this.delegate(this.agentRun, 'run'),
       auditLog: this.delegate(this.auditLog, 'audit'),
       systemSetting: this.delegate(this.systemSetting, 'setting'),
+      deadLetter: this.delegate(this.deadLetter, 'dead'),
     };
   }
 
@@ -106,11 +108,11 @@ export class FakePrisma {
         table.insert(row);
         return this.project(row, select);
       },
-      update: async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      update: async ({ where, data, select }: { where: Record<string, unknown>; data: Record<string, unknown>; select?: unknown }) => {
         const row = table.find((r) => matches(r, where));
         if (!row) throw new Error(`${prefix} update: row not found`);
         Object.assign(row, data);
-        return row;
+        return this.project(row, select);
       },
       upsert: async ({ where, create, update, select }: { where: Record<string, unknown>; create: Record<string, unknown>; update: Record<string, unknown>; select?: unknown }) => {
         const existing = table.find((r) => matches(r, where));

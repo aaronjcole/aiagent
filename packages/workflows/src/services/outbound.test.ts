@@ -154,6 +154,8 @@ describe('outboundSequenceService', () => {
     const again = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
     expect(again.status).toBe('sent');
     expect(prisma.draftEmail.rows).toHaveLength(1);
+    // CRITICAL: the rerun must NOT send again — exactly one email.send audit.
+    expect(prisma.auditLog.rows.filter((a) => a.action === 'email.send')).toHaveLength(1);
   });
 
   it('auto-send env + setting ON but SENDING_ENABLED off: NO send, approval created', async () => {

@@ -131,6 +131,19 @@ services:
       - >-
         pnpm --filter @app/db exec prisma migrate deploy &&
         node apps/api/dist/index.js
+    # Healthy only after migrations have run and the HTTP server is up. The
+    # worker depends on this so it never starts before the schema exists. Uses
+    # the always-present `node` runtime (the slim image has no curl/wget).
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:'+(process.env.API_PORT||3001)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
     networks:
       - aiagent
 
@@ -159,9 +172,10 @@ services:
         condition: service_healthy
       temporal:
         condition: service_started
-      # The API runs migrations first; wait for it so the schema exists.
+      # The API runs `prisma migrate deploy` before becoming healthy; waiting
+      # for service_healthy guarantees the schema exists before the worker boots.
       api:
-        condition: service_started
+        condition: service_healthy
     command:
       - sh
       - -c
