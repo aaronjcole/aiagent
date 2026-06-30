@@ -563,6 +563,38 @@ async function autoSendBranch(
     });
   }
 
+  // --- Send-site master kill switch (SENDING_ENABLED) ---
+  // Defense-in-depth: even when the policy layer allows, an autonomous send may
+  // NEVER go out while the master SENDING_ENABLED switch is off. The policy
+  // layer models only autonomy settings/caps and does NOT read this governance
+  // switch, so we re-check it here at the send site and fall back to the
+  // human-approval flow when it is off.
+  if (deps.config.sendingEnabled !== true) {
+    await writeAudit(deps, {
+      action: 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'denied',
+      allowed: false,
+      reason: 'master send switch (SENDING_ENABLED) is off',
+      idempotencyKey: draftKey,
+      metadata: { sequenceId, stepNumber },
+    });
+    return approvalFallback(deps, {
+      prospectId,
+      sequenceId,
+      stepNumber,
+      draftRow,
+      draft,
+      bodyWithFooter,
+      complianceReview,
+      gateResult: args.gateResult,
+      draftKey,
+      reasons: ['master send switch (SENDING_ENABLED) is off'],
+    });
+  }
+
   await writeAudit(deps, {
     action: 'policy.allowed',
     actorType: ActorType.SYSTEM,
