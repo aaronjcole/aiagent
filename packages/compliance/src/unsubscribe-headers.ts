@@ -12,15 +12,23 @@
  * does NOT replace it.
  */
 
+import { signUnsubscribeToken } from '@app/shared';
 import type { SettingsReader } from './settings.js';
 import { isValidEmail, normalizeEmail } from './email.js';
 
 /** Subset of `Config` the header builder reads. */
 export interface UnsubscribeHeaderConfig {
-  /** Base unsubscribe URL (e.g. `https://example.com/unsubscribe`). */
+  /** Base unsubscribe URL. RFC 8058 one-click requires `https://`. */
   unsubscribeBaseUrl?: string;
   /** Optional mailto address recipients can email to opt out. */
   unsubscribeMailto?: string;
+  /**
+   * Optional secret for signing one-click unsubscribe tokens. When present
+   * (and a valid recipient is supplied), the https one-click URL carries a
+   * signed `?token=` instead of a plain `?email=`, so the endpoint derives the
+   * target from a tamper-evident token rather than trusting query input.
+   */
+  unsubscribeTokenSecret?: string;
 }
 
 /** Inputs for {@link buildUnsubscribeHeaders}. */
@@ -59,14 +67,26 @@ export function buildUnsubscribeHeaders(
     mechanisms.push(`<mailto:${normalizeEmail(mailto)}>`);
   }
 
-  // https mechanism (one-click capable).
+  // https mechanism (one-click capable). RFC 8058 one-click MUST be HTTPS, so
+  // http:// (and any non-https scheme) is rejected here and falls back to the
+  // mailto mechanism only.
   let hasHttps = false;
   const base = config.unsubscribeBaseUrl?.trim();
-  if (base && /^https?:\/\//i.test(base)) {
+  if (base && /^https:\/\//i.test(base)) {
     const sep = base.includes('?') ? '&' : '?';
-    const url = isValidEmail(recipient)
-      ? `${base}${sep}email=${encodeURIComponent(normalizeEmail(recipient))}`
-      : base;
+    let url = base;
+    if (isValidEmail(recipient)) {
+      const normalized = normalizeEmail(recipient);
+      const secret = config.unsubscribeTokenSecret?.trim();
+      if (secret) {
+        // Prefer a signed token so the endpoint derives the target from a
+        // tamper-evident token instead of trusting the query string.
+        const token = signUnsubscribeToken({ email: normalized }, secret);
+        url = `${base}${sep}token=${encodeURIComponent(token)}`;
+      } else {
+        url = `${base}${sep}email=${encodeURIComponent(normalized)}`;
+      }
+    }
     mechanisms.push(`<${url}>`);
     hasHttps = true;
   }

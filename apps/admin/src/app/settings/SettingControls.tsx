@@ -6,7 +6,7 @@
  * the page so server-rendered sections reflect the new value. All show inline
  * success/error feedback and degrade to an error message on a 400/unreachable.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 
@@ -37,6 +37,9 @@ export function SelectSetting({
   const [current, setCurrent] = useState(value);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  // Sync local state when the incoming prop changes (router.refresh() preserves
+  // client state, so a save / out-of-band change would otherwise show stale).
+  useEffect(() => setCurrent(value), [value]);
 
   async function onChange(next: string) {
     const prev = current;
@@ -101,6 +104,9 @@ export function ValueSetting({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const dirty = draft !== value;
+  // Sync local state when the incoming prop changes (router.refresh() preserves
+  // client state, so a save / out-of-band change would otherwise show stale).
+  useEffect(() => setDraft(value), [value]);
 
   async function save() {
     setBusy(true);
@@ -129,13 +135,15 @@ export function ValueSetting({
   return (
     <tr>
       <td>
-        <div>{label}</div>
+        <div id={`value-label-${settingKey}`}>{label}</div>
         <code className="muted">{settingKey}</code>
         {help ? <div className="muted" style={{ fontSize: 11 }}>{help}</div> : null}
       </td>
       <td>
         <div className="row-actions" style={{ alignItems: 'center' }}>
           <input
+            id={`value-${settingKey}`}
+            aria-labelledby={`value-label-${settingKey}`}
             type={kind === 'text' ? 'text' : 'number'}
             step={kind === 'float' ? 'any' : 1}
             value={draft}
@@ -172,6 +180,9 @@ export function ToggleSetting({
   const [on, setOn] = useState(value);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
+  // Sync local state when the incoming prop changes (router.refresh() preserves
+  // client state, so a save / out-of-band change would otherwise show stale).
+  useEffect(() => setOn(value), [value]);
 
   async function toggle() {
     const next = !on;
@@ -233,6 +244,9 @@ export function ListSetting({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const dirty = draft !== joined;
+  // Sync local state when the incoming prop changes (router.refresh() preserves
+  // client state, so a save / out-of-band change would otherwise show stale).
+  useEffect(() => setDraft(joined), [joined]);
 
   async function save() {
     setBusy(true);

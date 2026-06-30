@@ -114,3 +114,80 @@ export async function createSettingsReader(prisma: PrismaClient): Promise<Settin
   }
   return makeSettingsReader({ raw: (key) => map.get(key) });
 }
+
+/** Default freshness window for {@link createLiveSettingsReader}'s cache. */
+export const DEFAULT_LIVE_SETTINGS_TTL_MS = 5000;
+
+/** Options for {@link createLiveSettingsReader}. */
+export interface LiveSettingsReaderOptions {
+  /**
+   * Cache freshness window in milliseconds. The reader serves values from a
+   * cached snapshot and synchronously re-queries `SystemSetting` only when the
+   * snapshot is older than this. Defaults to {@link DEFAULT_LIVE_SETTINGS_TTL_MS}
+   * (5000ms). A lower value propagates admin changes (kill switches / modes /
+   * readiness) faster at the cost of more DB reads; `0` re-queries on every read.
+   */
+  ttlMs?: number;
+}
+
+/**
+ * Build a LIVE {@link SettingsReader} that reflects current `SystemSetting`
+ * values WITHOUT a process restart. Unlike {@link createSettingsReader} (which
+ * snapshots once), this reader keeps a short-TTL cache and re-queries the DB in
+ * the background when the snapshot goes stale, so admin changes — kill switches,
+ * autonomy modes, readiness flags — take effect within the TTL window (default
+ * 5s) rather than at next deploy. The TTL bounds DB load so a hot path that
+ * checks settings many times per second does not trigger a per-call query storm.
+ *
+ * The reader exposes the SAME synchronous {@link SettingsReader} interface as the
+ * snapshot reader, so callers are unchanged. The synchronous getters read from
+ * the most recent snapshot; staleness triggers a non-blocking refresh whose
+ * result is applied to subsequent reads. The first snapshot is loaded eagerly
+ * before this function resolves.
+ *
+ * Intended for long-lived workers / API processes (wired in `createDeps()`).
+ * Tests continue to use {@link FakeSettingsReader}, which is TTL-free and
+ * therefore deterministic.
+ */
+export async function createLiveSettingsReader(
+  prisma: PrismaClient,
+  opts: LiveSettingsReaderOptions = {},
+): Promise<SettingsReader> {
+  const ttlMs = opts.ttlMs ?? DEFAULT_LIVE_SETTINGS_TTL_MS;
+  const keys = Object.keys(AUTONOMY_SETTINGS) as SETTING_KEYS[];
+
+  let snapshot = new Map<string, unknown>();
+  let loadedAt = 0;
+  let refreshing: Promise<void> | null = null;
+
+  async function load(): Promise<void> {
+    const rows = await prisma.systemSetting.findMany({ where: { key: { in: keys } } });
+    const next = new Map<string, unknown>();
+    for (const row of rows) next.set(row.key, row.value);
+    snapshot = next;
+    loadedAt = Date.now();
+  }
+
+  /** Kick off a refresh if the snapshot is stale; never throws to the caller. */
+  function maybeRefresh(): void {
+    if (refreshing) return;
+    if (Date.now() - loadedAt < ttlMs) return;
+    refreshing = load()
+      .catch(() => {
+        // Keep serving the last good snapshot on a transient DB error.
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+
+  // Eager initial load so the first reads see real values, not catalog defaults.
+  await load();
+
+  return makeSettingsReader({
+    raw: (key) => {
+      maybeRefresh();
+      return snapshot.get(key);
+    },
+  });
+}

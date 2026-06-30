@@ -317,9 +317,24 @@ export async function canSendNow(
   if (settings.bool('pauseOutboundSending'))
     recheck.push('kill switch: pauseOutboundSending is on (final re-check)');
 
+  // Paused-list kill switches re-checked at the last moment, using the SAME
+  // normalized sender/domain lookup as canAutoSendOutboundEmail().
+  const sender = normalizeEmail(input.senderEmail);
+  const recipientDomain = extractDomain(input.recipientEmail) ?? '';
+  const pausedSenders = settings
+    .strArray('pauseSpecificSenderAccounts')
+    .map((s) => s.trim().toLowerCase());
+  const pausedDomains = settings
+    .strArray('pauseSpecificDomains')
+    .map((d) => d.trim().toLowerCase());
+  if (pausedSenders.includes(sender))
+    recheck.push(`kill switch: sender ${sender} is paused (final re-check)`);
+  if (recipientDomain && pausedDomains.includes(recipientDomain))
+    recheck.push(`kill switch: domain ${recipientDomain} is paused (final re-check)`);
+
   // Time-sensitive min-minutes re-check.
   const minMinutes = settings.num('minMinutesBetweenAutoSendsPerSender');
-  const lastAt = await deps.caps.lastSenderSendAt(normalizeEmail(input.senderEmail));
+  const lastAt = await deps.caps.lastSenderSendAt(sender);
   if (lastAt) {
     const now = deps.now ?? new Date();
     const elapsedMin = (now.getTime() - lastAt.getTime()) / MINUTE_MS;
@@ -514,11 +529,18 @@ export function canAutoCreateCalendarEvent(
   }
 
   // --- Business hours (start AND end) ---
+  // The business-hours window is half-open [start, end), so an event ending
+  // exactly at `businessHoursEnd` (e.g. 16:30-17:00) must still be allowed.
+  // Validate the end using an exclusive instant one millisecond before `end`
+  // so end-exactly-at-close passes; the start check stays inclusive.
   const hours = settings.businessHours();
   if (startValid && !isWithinBusinessHours(input.startIso, hours))
     reasons.push('event start is outside business hours');
-  if (endValid && !isWithinBusinessHours(input.endIso, hours))
-    reasons.push('event end is outside business hours');
+  if (endValid) {
+    const endExclusiveIso = new Date(end.getTime() - 1).toISOString();
+    if (!isWithinBusinessHours(endExclusiveIso, hours))
+      reasons.push('event end is outside business hours');
+  }
 
   // --- Attendees ---
   const invalidAttendees = input.attendees.filter((a) => !isValidEmail(a));

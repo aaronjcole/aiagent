@@ -188,7 +188,7 @@ describe('outboundSequenceService', () => {
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      config: { enableAutoSend: false, sendingEnabled: true },
+      config: { enableAutoSend: false, autoSendEnabled: true, sendingEnabled: true },
       settings: autoSendSettings(),
       clockIso: BUSINESS_HOURS_ISO,
     });
@@ -226,7 +226,7 @@ describe('outboundSequenceService', () => {
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      config: { enableAutoSend: true, sendingEnabled: true },
+      config: { enableAutoSend: true, autoSendEnabled: true, sendingEnabled: true },
       // limited_auto_send mode but readiness NOT all-ready (default flags off).
       settings: { emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND },
       clockIso: BUSINESS_HOURS_ISO,
@@ -247,7 +247,7 @@ describe('outboundSequenceService', () => {
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(failReview()),
-      config: { enableAutoSend: true, sendingEnabled: true },
+      config: { enableAutoSend: true, autoSendEnabled: true, sendingEnabled: true },
       settings: autoSendSettings(),
       clockIso: BUSINESS_HOURS_ISO,
     });
@@ -264,7 +264,7 @@ describe('outboundSequenceService', () => {
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      config: { enableAutoSend: true, sendingEnabled: true },
+      config: { enableAutoSend: true, autoSendEnabled: true, sendingEnabled: true },
       settings: autoSendSettings({ maxAutoSendsPerSenderPerDay: 1 }),
       caps: { sender: { 'outreach@example.com': 5 } },
       clockIso: BUSINESS_HOURS_ISO,
@@ -283,7 +283,7 @@ describe('outboundSequenceService', () => {
     seed(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: llm(passReview()),
-      config: { enableAutoSend: true, sendingEnabled: true },
+      config: { enableAutoSend: true, autoSendEnabled: true, sendingEnabled: true },
       settings: autoSendSettings({ pauseOutboundSending: true }),
       clockIso: BUSINESS_HOURS_ISO,
     });

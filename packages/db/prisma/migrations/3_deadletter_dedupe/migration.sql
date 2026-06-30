@@ -9,11 +9,16 @@
 -- AlterTable: add the column nullable first so existing rows are valid.
 ALTER TABLE "DeadLetter" ADD COLUMN "dedupeKey" TEXT;
 
--- Backfill any existing rows with a deterministic, collision-free key derived
--- from workflowType + workflowId (falling back to the row id when workflowId is
--- null, so legacy rows never collide).
+-- Backfill any existing rows with a deterministic, collision-free key. The
+-- intended runtime semantics are `workflowType || ':' || workflowId`, but
+-- preexisting rows may share the same (workflowType, workflowId) — and rows with
+-- a null workflowId all fall back to a base key — so backfilling that base key
+-- verbatim would create duplicates and abort the unique index below. We append
+-- the row primary key (`id`, always unique) to EVERY backfilled key so legacy
+-- rows can never collide. This only affects rows that already exist at migration
+-- time; new rows written by the application still dedupe by workflowType:workflowId.
 UPDATE "DeadLetter"
-SET "dedupeKey" = "workflowType" || ':' || COALESCE("workflowId", "id")
+SET "dedupeKey" = "workflowType" || ':' || COALESCE("workflowId", "id") || ':' || "id"
 WHERE "dedupeKey" IS NULL;
 
 -- Enforce NOT NULL now that every row has a value.

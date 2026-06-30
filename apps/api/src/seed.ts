@@ -140,10 +140,13 @@ async function main(): Promise<void> {
 
   // --- Default SenderAccount (upsert by unique email) ---
   // The sending identity controlled-autonomy auto-send uses; active by default.
+  // Normalize to match how the workflow looks up sender accounts
+  // (`trim().toLowerCase()`), so the seeded row is found.
+  const senderEmail = config.defaultFromEmail.trim().toLowerCase();
   const senderAccount = await prisma.senderAccount.upsert({
-    where: { email: config.defaultFromEmail },
+    where: { email: senderEmail },
     create: {
-      email: config.defaultFromEmail,
+      email: senderEmail,
       name: config.defaultFromName,
       active: true,
     },

@@ -77,6 +77,9 @@ export const ConfigSchema = z.object({
   defaultFromName: z.string().default('Outreach Team'),
   companyAddress: z.string().default('123 Example St, City, ST 00000, USA'),
   unsubscribeBaseUrl: z.string().default('https://example.com/unsubscribe'),
+  // Secret used to sign/verify one-click unsubscribe tokens. No default: when
+  // unset, the unsubscribe endpoint falls back to non-signed (email=) links.
+  unsubscribeTokenSecret: z.string().optional(),
 
   // Services
   apiPort: intFromString(3001),
@@ -95,6 +98,7 @@ const SECRET_KEYS: readonly (keyof Config)[] = [
   'gmailRefreshToken',
   'googleClientSecret',
   'googleRefreshToken',
+  'unsubscribeTokenSecret',
 ];
 
 /**
@@ -145,6 +149,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     defaultFromName: env.DEFAULT_FROM_NAME,
     companyAddress: env.COMPANY_ADDRESS,
     unsubscribeBaseUrl: env.UNSUBSCRIBE_BASE_URL,
+    unsubscribeTokenSecret: env.UNSUBSCRIBE_TOKEN_SECRET,
 
     apiPort: env.API_PORT,
     adminPort: env.ADMIN_PORT,

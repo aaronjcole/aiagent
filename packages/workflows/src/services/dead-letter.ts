@@ -13,6 +13,7 @@
  * inside the services is unchanged (that is NOT a terminal failure).
  */
 
+import { createHash } from 'node:crypto';
 import {
   ActorType,
   ApprovalStatus,
@@ -95,18 +96,21 @@ function redactStack(error: unknown): string | null {
 /**
  * Stable, deterministic dedupe key for a terminal failure. Derived from the
  * workflowType + workflowId so a Temporal RETRY of the recording activity maps
- * to the SAME key (and thus the same DeadLetter row). Falls back to the input
- * hash when no workflowId is known, so distinct failures never collide.
+ * to the SAME key (and thus the same DeadLetter row). Falls back to a SHA-256
+ * digest of the FULL serialized input when no workflowId is known, so distinct
+ * failures never collide (a truncated prefix could map two different inputs to
+ * the same key).
  */
 function deriveDedupeKey(input: RecordTerminalFailureInput): string {
   if (input.workflowId) return `${input.workflowType}:${input.workflowId}`;
-  let inputHash: string;
+  let serialized: string;
   try {
-    inputHash = JSON.stringify(input.input ?? null);
+    serialized = JSON.stringify(input.input ?? null);
   } catch {
-    inputHash = String(input.input);
+    serialized = String(input.input);
   }
-  return `${input.workflowType}:${inputHash.slice(0, 200)}`;
+  const digest = createHash('sha256').update(serialized).digest('hex');
+  return `${input.workflowType}:${digest}`;
 }
 
 /** True when a thrown error is a Prisma unique-constraint (P2002) violation. */

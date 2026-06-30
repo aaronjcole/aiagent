@@ -17,6 +17,7 @@ import {
   NotFoundError,
   ValidationError,
   SuppressionReason,
+  verifyUnsubscribeToken,
 } from '@app/shared';
 import type { Prisma, PrismaClient } from '@app/db';
 import { addSuppression, createSuppressionRepo, createCapRepo } from '@app/compliance';
@@ -533,14 +534,49 @@ export interface UnsubscribeInput {
 }
 
 /**
- * Deterministically record an unsubscribe: add a SuppressionEntry (reason
- * UNSUBSCRIBE) via the existing suppression service and write the
- * `unsubscribe.detected` + `suppression.added` audit trail. No LLM. This backs
- * the HTTPS endpoint referenced by the List-Unsubscribe-Post header.
+ * Deterministically record an unsubscribe from the PUBLIC one-click HTTPS
+ * endpoint (List-Unsubscribe-Post). The target is DERIVED from a verified,
+ * signed token — caller-supplied `email`/`domain` are ignored for the
+ * suppression decision, so an attacker cannot suppress arbitrary recipients by
+ * hitting the public endpoint.
+ *
+ * Rejects (writing an `unsubscribe.rejected`, allowed=false audit and adding NO
+ * suppression) when no `UNSUBSCRIBE_TOKEN_SECRET` is configured, or the token
+ * is missing/invalid, or it carries no email/domain target. On success adds the
+ * SuppressionEntry (reason UNSUBSCRIBE) + writes the `unsubscribe.detected` +
+ * `suppression.added` audit trail. No LLM.
+ *
+ * NOTE: this governs only the public HTTP endpoint. The deterministic INBOUND
+ * opt-out path (body/subject classification → addSuppression in the workflow)
+ * and admin manual suppression are unaffected.
  */
-export async function recordUnsubscribe(prisma: PrismaClient, input: UnsubscribeInput) {
-  const email = input.email?.trim().toLowerCase();
-  const domain = input.domain?.trim().toLowerCase();
+export async function recordUnsubscribe(
+  prisma: PrismaClient,
+  input: UnsubscribeInput,
+  secret: string | undefined,
+) {
+  // Require a verified signed token; derive the target from its payload.
+  const verified = secret ? verifyUnsubscribeToken(input.token, secret) : null;
+  const email = verified?.email?.trim().toLowerCase();
+  const domain = verified?.domain?.trim().toLowerCase();
+
+  if (!email && !domain) {
+    // Either no secret configured, or token missing/invalid/empty target.
+    // Record the rejected attempt without suppressing anyone.
+    await writeAudit(prisma, {
+      action: 'unsubscribe.rejected',
+      actorType: ActorType.PROVIDER,
+      entityType: 'unsubscribe_request',
+      entityId: 'public_endpoint',
+      decision: 'rejected',
+      allowed: false,
+      reason: !secret
+        ? 'unsubscribe token secret not configured'
+        : 'missing or invalid unsubscribe token',
+      metadata: { hasToken: Boolean(input.token), secretConfigured: Boolean(secret) },
+    });
+    throw new ValidationError('invalid or missing unsubscribe token');
+  }
 
   const repo = createSuppressionRepo(prisma);
   await addSuppression(repo, {

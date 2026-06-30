@@ -342,6 +342,32 @@ describe('canAutoSendOutboundEmailWithCaps + canSendNow (cap gates)', () => {
     const d = await canSendNow(goodSend(), deps);
     expect(d.allow).toBe(false);
   });
+
+  it('canSendNow re-checks the paused-sender list at send time', async () => {
+    const deps = emailDeps({
+      settings: readySettings({
+        emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND,
+        pauseSpecificSenderAccounts: ['sender@us.example.com'],
+      }),
+    });
+    const d = await canSendNow(goodSend(), deps);
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('sender sender@us.example.com is paused');
+    expect(d.reasons.join(' ')).toContain('final re-check');
+  });
+
+  it('canSendNow re-checks the paused-domain list at send time', async () => {
+    const deps = emailDeps({
+      settings: readySettings({
+        emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND,
+        pauseSpecificDomains: ['acme.com'],
+      }),
+    });
+    const d = await canSendNow(goodSend(), deps);
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('domain acme.com is paused');
+    expect(d.reasons.join(' ')).toContain('final re-check');
+  });
 });
 
 describe('canAutoReplyInboundEmail', () => {
@@ -509,6 +535,25 @@ describe('canAutoCreateCalendarEvent / canBookNow', () => {
     );
     expect(d.allow).toBe(false);
     expect(d.reasons.join(' ')).toContain('business hours');
+  });
+
+  it('ALLOWS a slot ending exactly at close (half-open window)', () => {
+    // 16:30-17:00 ET = 20:30-21:00Z. End is exactly businessHoursEnd (17).
+    const d = canAutoCreateCalendarEvent(
+      goodCal({ startIso: '2025-06-30T20:30:00.000Z', endIso: '2025-06-30T21:00:00.000Z' }),
+      calDeps(),
+    );
+    expect(d.allow).toBe(true);
+  });
+
+  it('denies a slot ending after close', () => {
+    // 16:45-17:15 ET = 20:45-21:15Z. End (17:15) is past businessHoursEnd.
+    const d = canAutoCreateCalendarEvent(
+      goodCal({ startIso: '2025-06-30T20:45:00.000Z', endIso: '2025-06-30T21:15:00.000Z' }),
+      calDeps(),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('event end is outside business hours');
   });
 
   it('denies when external attendee not in thread', () => {

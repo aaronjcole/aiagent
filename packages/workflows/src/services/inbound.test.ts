@@ -399,9 +399,10 @@ describe('inboundEmailService — CalendarAutonomyMode', () => {
   });
 
   it('ALLOWED: re-entering the SAME thread+slot returns the existing event (calendar.create.idempotent)', async () => {
-    // Directly exercise the event-key idempotency precheck: a CalendarEvent row
-    // already exists for the slot the policy would pick, so a re-entry returns it
-    // without creating a duplicate provider event.
+    // Exercise the event-key idempotency precheck/guard: a CalendarEvent row
+    // already exists for the slot the policy picks, so a SECOND entry on the same
+    // thread+slot (a distinct providerMessageId, to bypass the provider-message
+    // dedup) returns the existing event WITHOUT creating a duplicate.
     const prisma = new FakePrisma();
     seedProspect(prisma);
     const deps = makeDeps(prisma, {
@@ -409,18 +410,72 @@ describe('inboundEmailService — CalendarAutonomyMode', () => {
       config: { enableAutoScheduling: true, enableAutoSend: true },
       settings: autoBookSettings(),
     });
-    const { threadId, messageId } = preseedThread(deps, 'Yes, slot #1 works for me!');
+    // Preseed the SAME thread with two inbound messages (same body/from/slot, so
+    // they resolve to the same booking) but distinct providerMessageIds.
+    const mock = deps.email as MockEmailProvider;
+    const [thread] = mock.preseed([
+      {
+        providerThreadId: 'thr_idem',
+        subject: 'Re: your email',
+        messages: [
+          {
+            providerMessageId: 'msg_idem_1',
+            from: { email: 'jane@acme.test' },
+            to: [{ email: deps.config.defaultFromEmail }],
+            subject: 'Re: your email',
+            body: 'Yes, slot #1 works for me!',
+            direction: EmailDirection.INBOUND,
+          },
+          {
+            providerMessageId: 'msg_idem_2',
+            from: { email: 'jane@acme.test' },
+            to: [{ email: deps.config.defaultFromEmail }],
+            subject: 'Re: your email',
+            body: 'Yes, slot #1 works for me!',
+            direction: EmailDirection.INBOUND,
+          },
+        ],
+      },
+    ]);
+    const threadId = thread!.providerThreadId;
 
-    // First booking creates the event.
-    const first = await inboundEmailService(deps, { providerMessageId: messageId, threadId });
+    // First booking creates the event (DB row + provider event).
+    const first = await inboundEmailService(deps, {
+      providerMessageId: 'msg_idem_1',
+      threadId,
+    });
     expect(first.status).toBe('scheduling_booked');
-    const eventCount = prisma.calendarEvent.rows.length;
-    // Drop the dedup message rows so a fresh entry re-reaches the booking path
-    // with the SAME slot still marked busy by the existing event → the slot the
-    // policy picks differs, but the existing-event guard prevents duplication of
-    // an already-booked slot. (Covered by the provider's idempotency on the key.)
-    expect(eventCount).toBe(1);
-    expect(prisma.calendarEvent.rows[0]!.providerEventId).toBeTruthy();
+    expect(prisma.calendarEvent.rows).toHaveLength(1);
+    const firstRow = prisma.calendarEvent.rows[0]!;
+    expect(firstRow.providerEventId).toBeTruthy();
+    const firstEventId = firstRow.id;
+
+    // Free the booked slot in the calendar PROVIDER only (the persisted DB
+    // CalendarEvent row stays CONFIRMED). This reproduces the conditions of a
+    // re-entry where availability recomputes to the SAME free slot — the
+    // policy/precheck would compute the SAME idempotency key — without us
+    // hand-constructing that key. The committed-booking idempotency guard must
+    // then return the existing event instead of creating a duplicate.
+    await deps.calendar.cancelEvent({
+      calendarId: deps.config.googleCalendarId,
+      providerEventId: firstRow.providerEventId as string,
+    });
+
+    // Second entry on the SAME thread+slot via a DISTINCT providerMessageId
+    // (bypasses the providerMessageId dedup, so the booking path is re-entered).
+    const second = await inboundEmailService(deps, {
+      providerMessageId: 'msg_idem_2',
+      threadId,
+    });
+    expect(second.status).toBe('scheduling_booked');
+    expect((second as { calendarEventId?: string }).calendarEventId).toBe(firstEventId);
+    // NO new CalendarEvent row was created.
+    expect(prisma.calendarEvent.rows).toHaveLength(1);
+    // The idempotency guard fired, and there was no SECOND successful create.
+    expect(prisma.auditLog.rows.some((a) => a.action === 'calendar.create.idempotent')).toBe(true);
+    expect(
+      prisma.auditLog.rows.filter((a) => a.action === 'calendar.create.succeeded'),
+    ).toHaveLength(1);
   });
 
   it('blocked by no explicit confirmation (selectedSlotIndex null): falls back to PROPOSED + policy.denied', async () => {
@@ -441,6 +496,33 @@ describe('inboundEmailService — CalendarAutonomyMode', () => {
 
     expect(result.status).toBe('scheduling_proposed');
     expect(prisma.calendarEvent.rows[0]!.providerEventId).toBeUndefined();
+    const denied = prisma.auditLog.rows.find((a) => a.action === 'policy.denied');
+    expect(String(denied!.reason)).toContain('explicit');
+  });
+
+  it('out-of-range selectedSlotIndex: NO slot-0 auto-confirm; falls back to PROPOSED + policy.denied', async () => {
+    // An out-of-range index is NOT an explicit agreement to any slot. It must not
+    // silently default to freeSlots[0] (which would auto-confirm a slot the
+    // recipient never chose); it must route to the propose/clarify path.
+    const prisma = new FakePrisma();
+    seedProspect(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: new FixedLlmProvider({
+        inbound_classify: classification({ confidence: 0.95 }),
+        scheduling_extract: extraction({ selectedSlotIndex: 99 }),
+        scheduling_reply: REPLY,
+      }),
+      config: { enableAutoScheduling: true, enableAutoSend: true },
+      settings: autoBookSettings(),
+    });
+    const { threadId, messageId } = preseedThread(deps, 'Yes, that time works!');
+
+    const result = await inboundEmailService(deps, { providerMessageId: messageId, threadId });
+
+    expect(result.status).toBe('scheduling_proposed');
+    // No provider event was created (no slot-0 auto-confirm).
+    expect(prisma.calendarEvent.rows[0]!.providerEventId).toBeUndefined();
+    expect(prisma.auditLog.rows.some((a) => a.action === 'calendar.create.succeeded')).toBe(false);
     const denied = prisma.auditLog.rows.find((a) => a.action === 'policy.denied');
     expect(String(denied!.reason)).toContain('explicit');
   });

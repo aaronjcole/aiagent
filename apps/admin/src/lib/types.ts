@@ -15,6 +15,8 @@ import type {
   ApprovalStatus,
   SuppressionReason,
   EmailDirection,
+  EmailAutonomyMode,
+  CalendarAutonomyMode,
 } from '@app/shared';
 
 /** Any JSON value returned by the API. */
@@ -159,15 +161,12 @@ export interface OutreachSequence {
   maxSteps?: number | null;
 }
 
-/** Email autonomy ladder (mirrors `@app/shared` `EmailAutonomyMode`). */
-export type EmailAutonomyMode =
-  | 'disabled'
-  | 'draft_only'
-  | 'approval_required'
-  | 'limited_auto_send';
-
-/** Calendar autonomy ladder (mirrors `@app/shared` `CalendarAutonomyMode`). */
-export type CalendarAutonomyMode = 'disabled' | 'propose_times_only' | 'auto_book_confirmed';
+/**
+ * Re-export the canonical autonomy ladders from `@app/shared` so the admin UI
+ * uses the single source of truth (type-only; can't drift from a hand-mirrored
+ * copy).
+ */
+export type { EmailAutonomyMode, CalendarAutonomyMode };
 
 /**
  * Live automation counts from `GET /automation/counts`. All fields optional so

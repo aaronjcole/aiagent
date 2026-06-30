@@ -55,4 +55,39 @@ describe('buildUnsubscribeHeaders', () => {
     expect(h['List-Unsubscribe']).toContain('https://example.com/u');
     expect(h['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
   });
+
+  it('rejects http:// (non-https) base URLs — no one-click', () => {
+    const settings = new FakeSettingsReader({ unsubscribeConfigured: true });
+    const h = buildUnsubscribeHeaders({
+      settings,
+      config: { unsubscribeBaseUrl: 'http://example.com/u' },
+      recipient,
+    });
+    // http is not a valid one-click endpoint and there is no other mechanism.
+    expect(h).toEqual({});
+  });
+
+  it('falls back to mailto when base URL is http:// (non-https)', () => {
+    const settings = new FakeSettingsReader({ unsubscribeConfigured: true });
+    const h = buildUnsubscribeHeaders({
+      settings,
+      config: { unsubscribeBaseUrl: 'http://example.com/u', unsubscribeMailto: 'unsub@example.com' },
+      recipient,
+    });
+    expect(h['List-Unsubscribe']).toBe('<mailto:unsub@example.com>');
+    expect(h['List-Unsubscribe']).not.toContain('http://example.com/u');
+    expect(h['List-Unsubscribe-Post']).toBeUndefined();
+  });
+
+  it('uses a signed ?token= when a secret is configured', () => {
+    const settings = new FakeSettingsReader({ unsubscribeConfigured: true });
+    const h = buildUnsubscribeHeaders({
+      settings,
+      config: { unsubscribeBaseUrl: 'https://example.com/u', unsubscribeTokenSecret: 'shh' },
+      recipient,
+    });
+    expect(h['List-Unsubscribe']).toContain('token=');
+    expect(h['List-Unsubscribe']).not.toContain('email=');
+    expect(h['List-Unsubscribe-Post']).toBe('List-Unsubscribe=One-Click');
+  });
 });

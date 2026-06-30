@@ -737,12 +737,17 @@ async function tryAutoBook(
     freeSlots: TimeSlot[];
   },
 ): Promise<InboundEmailResult | null> {
-  // Pick the slot the recipient agreed to (selectedSlotIndex), else the first
-  // free slot. `explicitSlotAgreement` requires a concrete selection.
+  // Pick the slot the recipient agreed to (selectedSlotIndex). The index must be
+  // IN-RANGE of the available free slots to count as an explicit agreement — an
+  // out-of-range index means we cannot identify a slot the recipient actually
+  // chose, so we must NOT auto-confirm (and must NOT silently fall back to
+  // slot 0). With no usable explicit slot we leave `chosen` undefined, which
+  // drives the policy to deny and the caller to route to propose/clarify.
   const idx = args.extraction.selectedSlotIndex;
-  const explicitSlotAgreement = idx !== null && idx !== undefined;
-  const chosen =
-    (explicitSlotAgreement ? args.freeSlots[idx] : undefined) ?? args.freeSlots[0];
+  const idxInRange =
+    idx !== null && idx !== undefined && idx >= 0 && idx < args.freeSlots.length;
+  const explicitSlotAgreement = idxInRange;
+  const chosen = idxInRange ? args.freeSlots[idx] : undefined;
 
   // Sensitivity flags from the classifier's risk flags (pricing/legal/etc.).
   const sensitiveFlags = (args.classification.riskFlags ?? []).map((f) => String(f));
@@ -772,6 +777,33 @@ async function tryAutoBook(
         select: { id: true, providerEventId: true },
       })
     : null;
+
+  // Idempotency short-circuit: a committed booking already exists for this exact
+  // (thread + attendees + slot) key — e.g. a re-run / a later inbound message on
+  // the same thread re-reaching this path. Return the existing event WITHOUT
+  // re-evaluating the booking policy. (The policy would deny on `alreadyExists`
+  // and the caller would fall back to PROPOSE_TIMES_ONLY, re-reporting an
+  // already-confirmed booking as proposed and risking a duplicate PROPOSED row.)
+  if (existing?.providerEventId) {
+    await writeAudit(deps, {
+      action: 'calendar.create.idempotent',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: existing.id,
+      decision: 'idempotent',
+      allowed: true,
+      reason: 'event already exists for idempotency key',
+      idempotencyKey: eventKey,
+      metadata: { providerEventId: existing.providerEventId },
+    });
+    return {
+      status: 'scheduling_booked',
+      threadId: args.threadRowId,
+      messageId: args.messageRowId,
+      category: 'interested_schedule',
+      calendarEventId: existing.id,
+    };
+  }
 
   const policyDeps: CalendarPolicyDeps = {
     settings: deps.settings,
@@ -855,28 +887,8 @@ async function tryAutoBook(
 
   const slot = chosen as TimeSlot;
 
-  // Idempotency: an event with this key already exists (e.g. a re-run after the
-  // create committed) → return it without creating a duplicate.
-  if (existing?.providerEventId) {
-    await writeAudit(deps, {
-      action: 'calendar.create.idempotent',
-      actorType: ActorType.SYSTEM,
-      entityType: 'calendar_event',
-      entityId: existing.id,
-      decision: 'idempotent',
-      allowed: true,
-      reason: 'event already exists for idempotency key',
-      idempotencyKey: eventKey,
-      metadata: { providerEventId: existing.providerEventId },
-    });
-    return {
-      status: 'scheduling_booked',
-      threadId: args.threadRowId,
-      messageId: args.messageRowId,
-      category: 'interested_schedule',
-      calendarEventId: existing.id,
-    };
-  }
+  // (The committed-event idempotency short-circuit ran before policy evaluation,
+  // above; reaching here means no committed event exists for this key.)
 
   await writeAudit(deps, {
     action: 'calendar.create.attempted',
@@ -954,15 +966,33 @@ async function tryAutoBook(
     });
 
     // --- Confirmation email, gated by the inbound auto-reply policy ---
-    await sendOrDraftConfirmation(deps, {
-      threadRowId: args.threadRowId,
-      prospectId: args.prospectId,
-      thread: args.thread,
-      toEmail: args.inboundMsg.from.email,
-      subject: args.inboundMsg.subject,
-      slot,
-      timezone: args.timezone,
-    });
+    // The provider event + CalendarEvent row are now committed; the booking has
+    // SUCCEEDED. The confirmation is a SEPARATE side effect — wrap it in its own
+    // try/catch so a confirmation/draft/audit failure cannot flip the booking
+    // outcome to "proposed" (which would also risk a duplicate PROPOSED row). A
+    // confirmation failure is logged but does not change the returned status.
+    try {
+      await sendOrDraftConfirmation(deps, {
+        threadRowId: args.threadRowId,
+        prospectId: args.prospectId,
+        thread: args.thread,
+        toEmail: args.inboundMsg.from.email,
+        subject: args.inboundMsg.subject,
+        slot,
+        timezone: args.timezone,
+      });
+    } catch (confirmErr) {
+      await writeAudit(deps, {
+        action: 'email.send.failed',
+        actorType: ActorType.SYSTEM,
+        entityType: 'email_thread',
+        entityId: args.threadRowId,
+        decision: 'failed',
+        allowed: false,
+        reason: confirmErr instanceof Error ? confirmErr.message : String(confirmErr),
+        metadata: { kind: 'booking_confirmation', note: 'booking committed; confirmation failed' },
+      });
+    }
 
     return {
       status: 'scheduling_booked',
@@ -1020,7 +1050,17 @@ async function sendOrDraftConfirmation(
   };
 
   const decision = await canAutoReplyInboundEmail(replyInput, policyDeps);
-  const confirmKey = idempotencyKey([args.thread.providerThreadId, 'booking-confirm']);
+  // Key the confirmation idempotency on the SPECIFIC booking (slot + timezone),
+  // not just the thread. Multiple bookings can occur on the same thread; a
+  // thread-only key would collide and reuse an old confirmation draft / skip a
+  // new booking's confirmation.
+  const confirmKey = idempotencyKey([
+    args.thread.providerThreadId,
+    'booking-confirm',
+    args.slot.startIso,
+    args.slot.endIso,
+    args.timezone,
+  ]);
 
   if (!decision.allow) {
     // Draft the confirmation instead of auto-sending it.

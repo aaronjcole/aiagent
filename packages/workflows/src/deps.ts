@@ -14,7 +14,7 @@ import { createCalendarProvider, type CalendarProvider } from '@app/calendar';
 import type { PrismaClient } from '@app/db';
 import { createLogger, loadConfig, type Config, type Logger } from '@app/shared';
 import {
-  createSettingsReader,
+  createLiveSettingsReader,
   createCapRepo,
   type SettingsReader,
   type CapRepo,
@@ -71,8 +71,10 @@ export async function createDeps(options: CreateDepsOptions = {}): Promise<Deps>
   // fake prisma) never construct a real client / load the query engine.
   const prisma = options.prisma ?? (await import('@app/db')).prisma;
 
-  // Load the autonomy settings snapshot once and build the policy-layer deps.
-  const settings = await createSettingsReader(prisma);
+  // Build a LIVE settings reader (short-TTL refreshable) so admin changes to
+  // autonomy modes / kill switches / readiness propagate within seconds instead
+  // of requiring a process restart. Same synchronous SettingsReader interface.
+  const settings = await createLiveSettingsReader(prisma);
   const caps = createCapRepo(prisma);
 
   return {
