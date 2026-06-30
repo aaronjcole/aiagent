@@ -14,6 +14,7 @@ const STATUSES = [
   'cancelled',
 ] as const;
 
+/** Status dropdown that navigates the drafts list to the selected status filter. */
 export function DraftStatusFilter({ status }: { status: string }) {
   const router = useRouter();
   return (

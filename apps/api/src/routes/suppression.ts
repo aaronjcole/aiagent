@@ -21,9 +21,12 @@ const AddBody = z
     message: 'either email or domain is required',
   });
 
+/** Register the suppression routes: list, add (201), and remove a suppression entry. */
 export function registerSuppressionRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // GET /suppression — list suppression entries (newest first).
   app.get('/suppression', async () => listSuppression(ctx.prisma));
 
+  // POST /suppression — add a suppression entry (201) by email or domain.
   app.post('/suppression', async (req, reply) => {
     const body = AddBody.parse(req.body);
     const entry = await addSuppressionEntry(ctx.prisma, body);
@@ -31,6 +34,7 @@ export function registerSuppressionRoutes(app: FastifyInstance, ctx: AppContext)
     return entry;
   });
 
+  // DELETE /suppression/:id — remove a suppression entry by id (records an audit).
   app.delete('/suppression/:id', async (req) => {
     const { id } = req.params as { id: string };
     return removeSuppressionEntry(ctx.prisma, id);

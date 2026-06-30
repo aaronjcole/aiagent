@@ -8,6 +8,7 @@ import 'dotenv/config';
 import { createAppContext } from './context.js';
 import { buildServer } from './server.js';
 
+/** API entrypoint: build the server, install signal handlers, and start listening. */
 async function main(): Promise<void> {
   const ctx = createAppContext();
   const app = buildServer(ctx);

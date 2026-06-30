@@ -1,3 +1,8 @@
+/**
+ * Agent tests: each agent returns schema-valid output and populated metadata
+ * against the mock provider, forwards the correct `agentType`, and propagates
+ * `EscalationError` rather than swallowing it.
+ */
 import { describe, expect, it } from 'vitest';
 import {
   ComplianceReviewSchema,
@@ -25,6 +30,7 @@ import {
   type AgentMeta,
 } from './index.js';
 
+/** A client backed by the deterministic mock provider. */
 function mockClient(): LlmClient {
   return new LlmClient(new MockLlmProvider());
 }
@@ -143,6 +149,7 @@ class CapturingProvider implements LlmProvider {
   readonly model = 'mock-1';
   readonly seen: string[] = [];
   constructor(private readonly inner = new MockLlmProvider()) {}
+  /** Record the requested `agentType`, then delegate to the inner mock. */
   rawComplete(req: RawCompleteRequest): Promise<RawCompleteResult> {
     this.seen.push(req.agentType ?? '');
     return this.inner.rawComplete(req);
@@ -200,6 +207,7 @@ describe('agents pass the correct agentType so the mock yields the right shape',
 class BadJsonProvider implements LlmProvider {
   readonly name = 'mock' as const;
   readonly model = 'bad';
+  /** Always return un-parseable text so the repair loop exhausts and escalates. */
   rawComplete(_req: RawCompleteRequest): Promise<RawCompleteResult> {
     return Promise.resolve({ text: 'definitely not json {{{', usage: null });
   }

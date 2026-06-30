@@ -1,3 +1,4 @@
+/** Tests for {@link checkEligibility}: prospect outreach eligibility rules. */
 import { describe, it, expect } from 'vitest';
 import { ResearchStatus } from '@app/shared';
 import { checkEligibility } from './eligibility.js';

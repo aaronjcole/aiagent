@@ -20,19 +20,23 @@ const DecisionBody = z
   .object({ reason: z.string().optional(), actor: z.string().optional() })
   .default({});
 
+/** Register the approval routes: list pending approvals, approve, and reject. */
 export function registerApprovalRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // GET /approvals — list approval items, optionally by ?status (default PENDING).
   app.get('/approvals', async (req) => {
     const { status } = req.query as { status?: string };
     const parsed = StatusQuery.parse(status) ?? ApprovalStatus.PENDING;
     return listApprovals(ctx.prisma, parsed);
   });
 
+  // POST /approvals/:id/approve — approve an approval item (records an audit log).
   app.post('/approvals/:id/approve', async (req) => {
     const { id } = req.params as { id: string };
     const body = DecisionBody.parse(req.body ?? {});
     return approveApproval(ctx.prisma, id, body);
   });
 
+  // POST /approvals/:id/reject — reject an approval item (records an audit log).
   app.post('/approvals/:id/reject', async (req) => {
     const { id } = req.params as { id: string };
     const body = DecisionBody.parse(req.body ?? {});

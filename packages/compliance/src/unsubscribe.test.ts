@@ -1,3 +1,4 @@
+/** Tests for {@link classifyUnsubscribe}: deterministic opt-out detection. */
 import { describe, it, expect } from 'vitest';
 import { classifyUnsubscribe } from './unsubscribe.js';
 

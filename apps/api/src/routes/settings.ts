@@ -20,15 +20,19 @@ const SettingSchemas = {
 
 type SettingKey = keyof typeof SettingSchemas;
 
+/** Type guard: is `key` one of the writable, allow-listed setting keys? */
 function isSettingKey(key: string): key is SettingKey {
   return Object.prototype.hasOwnProperty.call(SettingSchemas, key);
 }
 
 const PutBody = z.object({ value: z.unknown() });
 
+/** Register the settings routes: list all settings and update one by key. */
 export function registerSettingsRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // GET /settings — list all system settings (sorted by key).
   app.get('/settings', async () => listSettings(ctx.prisma));
 
+  // PUT /settings/:key — validate and upsert one allow-listed setting value.
   app.put('/settings/:key', async (req) => {
     const { key } = req.params as { key: string };
     if (!isSettingKey(key)) {

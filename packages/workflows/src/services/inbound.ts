@@ -46,11 +46,13 @@ import { proposeCalendarEvent } from './calendar.js';
 import { isValidIanaTimezone } from './tz.js';
 import { persistAgentRun, toJson, writeAudit } from './shared.js';
 
+/** Input to {@link inboundEmailService}: identifies the message/thread to process. */
 export interface InboundEmailInput {
   providerMessageId?: string;
   threadId?: string;
 }
 
+/** Terminal outcome of processing one inbound email. */
 export type InboundOutcome =
   | 'duplicate'
   | 'unsubscribed'
@@ -59,6 +61,7 @@ export type InboundOutcome =
   | 'escalated'
   | 'handled';
 
+/** Result of processing one inbound email: outcome plus the rows it touched. */
 export interface InboundEmailResult {
   status: InboundOutcome;
   threadId?: string;

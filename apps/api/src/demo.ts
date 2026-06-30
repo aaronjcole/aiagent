@@ -44,10 +44,12 @@ import { MockEmailProvider } from '@app/email';
 
 const USE_TEMPORAL = !process.argv.includes('--no-temporal');
 
+/** Print a boxed section header to the console. */
 function section(title: string): void {
   console.log(`\n${'='.repeat(70)}\n${title}\n${'='.repeat(70)}`);
 }
 
+/** Print a `label: value` row, JSON-stringifying non-string values. */
 function row(label: string, value: unknown): void {
   console.log(`  ${label}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
 }
@@ -55,6 +57,7 @@ function row(label: string, value: unknown): void {
 const DEMO_DOMAIN = 'demo.example.com';
 const DEMO_EMAIL = 'casey.demo@demo.example.com';
 
+/** Step 1: upsert the demo company + prospect, returning the prospect id/email. */
 async function ensureProspect(): Promise<{ id: string; email: string }> {
   section('STEP 1 — Ensure demo prospect');
   const company = await prisma.company.upsert({
@@ -80,6 +83,7 @@ async function ensureProspect(): Promise<{ id: string; email: string }> {
   return { id: prospect.id, email: prospect.email };
 }
 
+/** Return the prospect's existing sequence id, creating a minimal one if none. */
 async function getSequenceId(prospectId: string): Promise<string> {
   // Prefer the seeded "Default Outbound"; otherwise create a minimal sequence.
   const existing = await prisma.outreachSequence.findFirst({
@@ -93,6 +97,7 @@ async function getSequenceId(prospectId: string): Promise<string> {
   return created.id;
 }
 
+/** Step 2: run the research workflow/service and print the resulting rows. */
 async function runResearch(deps: Deps, client: Client | undefined, prospectId: string): Promise<void> {
   section('STEP 2 — Research workflow');
   if (USE_TEMPORAL && client) {
@@ -123,6 +128,7 @@ async function runResearch(deps: Deps, client: Client | undefined, prospectId: s
   row('AgentRun', agentRun ? { id: agentRun.id, status: agentRun.status, model: agentRun.model } : null);
 }
 
+/** Step 3: run the outbound sequence (auto-send off) and print the draft/approval. */
 async function runOutbound(
   deps: Deps,
   client: Client | undefined,
@@ -159,6 +165,7 @@ async function runOutbound(
   row('sent?', draft?.status === 'sent' ? 'YES' : 'NO (expected — auto-send OFF)');
 }
 
+/** Step 4: preseed + run the in-process inbound scheduling flow and print results. */
 async function runInbound(deps: Deps, prospectId: string, prospectEmail: string): Promise<void> {
   section('STEP 4 — Simulate inbound scheduling reply (IN-PROCESS mock provider)');
   console.log('  note: preseeds the in-memory mock email provider, then runs the inbound flow.');
@@ -221,6 +228,7 @@ async function runInbound(deps: Deps, prospectId: string, prospectEmail: string)
   row('CalendarEvent', event ? { id: event.id, status: event.status, timezone: event.timezone } : null);
 }
 
+/** Step 5: print the most recent audit logs as the decision trail. */
 async function dumpAuditLogs(): Promise<void> {
   section('STEP 5 — Recent AuditLogs (decision trail)');
   const logs = await prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 25 });
@@ -236,6 +244,7 @@ async function dumpAuditLogs(): Promise<void> {
   }
 }
 
+/** Demo entrypoint: wire up Deps (+ optional Temporal client) and run steps 1–5. */
 async function main(): Promise<void> {
   const config = loadConfig();
   if (!process.env.DATABASE_URL) {

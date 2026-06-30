@@ -30,10 +30,12 @@ import {
   writeAudit,
 } from './shared.js';
 
+/** Input to {@link researchProspectService}. */
 export interface ResearchProspectInput {
   prospectId: string;
 }
 
+/** Result of the research flow: terminal status plus the rows it produced. */
 export interface ResearchProspectResult {
   status: 'researched' | 'escalated';
   prospectId: string;

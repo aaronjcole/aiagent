@@ -4,13 +4,16 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { AuditLog } from '../../lib/types';
 import { AuditFilter } from './AuditFilter';
 
+/** Always render at request time so audit logs reflect live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Query params accepted by the audit page (entity-type filter + row limit). */
 interface SearchParams {
   entityType?: string;
   limit?: string;
 }
 
+/** Audit page: lists audit logs (newest first), filterable by entity type/limit. */
 export default async function AuditPage({ searchParams }: { searchParams: SearchParams }) {
   const entityType = searchParams.entityType ?? '';
   const limit = Number(searchParams.limit ?? '50') || 50;

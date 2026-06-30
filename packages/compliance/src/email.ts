@@ -10,6 +10,7 @@
  */
 const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)*\.[^\s@.]{2,}$/;
 
+/** True if `email` is a single, well-formed address per the pragmatic rules above. */
 export function isValidEmail(email: string | null | undefined): boolean {
   if (typeof email !== 'string') return false;
   const trimmed = email.trim();

@@ -17,6 +17,7 @@ import type {
 } from './types.js';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+/** The timestamp 24 hours before `now`, the lower bound of the rolling window. */
 function since24h(now: Date = new Date()): Date {
   return new Date(now.getTime() - MS_PER_DAY);
 }

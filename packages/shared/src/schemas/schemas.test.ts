@@ -1,3 +1,4 @@
+/** Tests validating the shared Zod schemas accept/reject the expected shapes. */
 import { describe, it, expect } from 'vitest';
 import {
   ResearchOutputSchema,

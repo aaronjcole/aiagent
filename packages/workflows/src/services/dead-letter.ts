@@ -22,6 +22,7 @@ import {
 import type { Deps } from '../deps.js';
 import { toJson, writeAudit } from './shared.js';
 
+/** Input to {@link recordTerminalFailure}: the failed workflow + its error. */
 export interface RecordTerminalFailureInput {
   /** The workflow type that failed (e.g. `researchProspectWorkflow`). */
   workflowType: string;
@@ -33,6 +34,7 @@ export interface RecordTerminalFailureInput {
   error: unknown;
 }
 
+/** Result: the ids of the durable DeadLetter row + ESCALATION ApprovalItem. */
 export interface RecordTerminalFailureResult {
   deadLetterId: string;
   approvalItemId: string;

@@ -1,8 +1,14 @@
+/**
+ * Send-approved-draft tests: rejects a non-APPROVED draft, blocks when
+ * SENDING_ENABLED is off (even with approval), and sends exactly once when
+ * enabled — idempotent on rerun (a SENT draft short-circuits).
+ */
 import { describe, it, expect } from 'vitest';
 import { DraftStatus, ProspectStatus, ValidationError } from '@app/shared';
 import { sendApprovedDraft } from './send.js';
 import { FakePrisma, makeDeps } from './test-helpers.js';
 
+/** Seed a prospect + one draft in the given status; returns the draft id. */
 function seed(prisma: FakePrisma, draftStatus: string = DraftStatus.APPROVED): string {
   prisma.prospect.insert({
     id: 'p1',

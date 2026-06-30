@@ -1,3 +1,9 @@
+/**
+ * Inbound service tests: deterministic unsubscribe short-circuits the LLM;
+ * clear scheduling proposes a draft + PROPOSED event; ambiguous/invalid
+ * timezone clarifies; sensitive/low-confidence categories escalate; and
+ * duplicate messages return early without double-processing.
+ */
 import { describe, it, expect } from 'vitest';
 import { EmailDirection, ProspectStatus } from '@app/shared';
 import type { InboundClassification, SchedulingExtraction, SchedulingReplyDraft } from '@app/shared';
@@ -5,6 +11,7 @@ import { MockEmailProvider } from '@app/email';
 import { inboundEmailService } from './inbound.js';
 import { FakePrisma, makeDeps, FixedLlmProvider, FailingLlmProvider } from './test-helpers.js';
 
+/** Seed a single prospect identified by `email`. */
 function seedProspect(prisma: FakePrisma, email = 'jane@acme.test'): void {
   prisma.prospect.insert({
     id: 'p1',
@@ -43,6 +50,7 @@ function preseedThread(
   return { threadId: t.providerThreadId, messageId: t.messages[0]!.providerMessageId };
 }
 
+/** Build an inbound classification, defaulting to a clear scheduling intent. */
 function classification(over: Partial<InboundClassification> = {}): InboundClassification {
   return {
     category: 'interested_schedule',
@@ -54,6 +62,7 @@ function classification(over: Partial<InboundClassification> = {}): InboundClass
   };
 }
 
+/** Build a scheduling extraction, defaulting to a known-timezone intent. */
 function extraction(over: Partial<SchedulingExtraction> = {}): SchedulingExtraction {
   return {
     hasSchedulingIntent: true,

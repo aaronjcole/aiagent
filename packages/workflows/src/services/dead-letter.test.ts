@@ -1,3 +1,8 @@
+/**
+ * Dead-letter tests: a terminal failure records a DeadLetter row, an ESCALATION
+ * approval, and a `workflow.terminal_failure` audit, handling both Error and
+ * plain-string thrown values.
+ */
 import { describe, it, expect } from 'vitest';
 import { recordTerminalFailure } from './dead-letter.js';
 import { FakePrisma, makeDeps } from './test-helpers.js';

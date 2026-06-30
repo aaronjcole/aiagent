@@ -6,6 +6,7 @@ import { client } from '../../lib/client';
 
 const REASONS = ['unsubscribe', 'bounce', 'complaint', 'manual', 'global_block', 'competitor'] as const;
 
+/** Form for adding a suppression entry (by email or domain) via the API. */
 export function AddSuppression() {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -74,6 +75,7 @@ export function AddSuppression() {
   );
 }
 
+/** Button that removes a suppression entry by id via the API. */
 export function DeleteSuppression({ id }: { id: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);

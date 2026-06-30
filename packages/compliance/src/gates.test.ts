@@ -1,3 +1,4 @@
+/** Tests for {@link runOutboundGates}: the ordered outbound safety gate sequence. */
 import { describe, it, expect } from 'vitest';
 import type { ComplianceReview } from '@app/shared';
 import { runOutboundGates } from './gates.js';

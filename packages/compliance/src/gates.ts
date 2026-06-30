@@ -44,6 +44,7 @@ import { checkSuppression } from './suppression.js';
 import { checkSendingCaps } from './caps.js';
 import { ensureFooter } from './footer.js';
 
+/** All inputs, injected repos, and config for {@link runOutboundGates}. */
 export interface RunOutboundGatesArgs {
   prospect: ProspectLike | null | undefined;
   /** Recipient email; defaults to `prospect.email` when omitted. */
@@ -80,13 +81,21 @@ export interface RunOutboundGatesArgs {
   hasHumanApproval?: boolean;
 }
 
+/** Build a passing {@link GateDecision} for `gate`. */
 function pass(gate: string, reason = 'ok'): GateDecision {
   return { gate, passed: true, reason };
 }
+/** Build a failing {@link GateDecision} for `gate` with the given reason. */
 function fail(gate: string, reason: string): GateDecision {
   return { gate, passed: false, reason };
 }
 
+/**
+ * Deterministic outbound safety-gate evaluator: the single chokepoint every
+ * outbound send must pass. Runs the ordered gates (see file header) over the
+ * injected repos/config plus the supplied {@link ComplianceReview}, and reports
+ * the safety verdict plus whether the send may auto-send or needs human approval.
+ */
 export async function runOutboundGates(
   args: RunOutboundGatesArgs,
 ): Promise<OutboundGateResult> {

@@ -4,8 +4,10 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { SuppressionEntry } from '../../lib/types';
 import { AddSuppression, DeleteSuppression } from './SuppressionActions';
 
+/** Always render at request time so the suppression list reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Suppression page: form to add an entry plus a table of suppression entries. */
 export default async function SuppressionPage() {
   const res = await read<unknown>('/suppression');
   const entries = res.ok ? asArray<SuppressionEntry>(res.data) : null;

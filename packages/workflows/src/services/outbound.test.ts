@@ -1,3 +1,9 @@
+/**
+ * Outbound service tests: drives one sequence step through draft → footer →
+ * compliance → ordered gates, asserting the default approval path (no auto-send),
+ * ineligibility short-circuits, and that a failing compliance verdict routes to
+ * human review rather than sending.
+ */
 import { describe, it, expect } from 'vitest';
 import { ProspectStatus, ResearchStatus, DraftStatus } from '@app/shared';
 import { outboundSequenceService } from './outbound.js';
@@ -25,9 +31,11 @@ const OUTREACH: OutreachDraft = {
   riskFlags: [],
 };
 
+/** A clean compliance verdict. */
 function passReview(): ComplianceReview {
   return { decision: 'pass', issues: [], hasUnsupportedClaims: false, suggestedFixes: [], confidence: 0.95 };
 }
+/** A failing compliance verdict with one high-severity issue. */
 function failReview(): ComplianceReview {
   return {
     decision: 'fail',
@@ -38,6 +46,7 @@ function failReview(): ComplianceReview {
   };
 }
 
+/** Seed a READY prospect + a researched ResearchResult for the outbound flow. */
 function seed(prisma: FakePrisma, opts: { researchStatus?: string } = {}): void {
   prisma.prospect.insert({
     id: 'p1',

@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { extractDomain, normalizeEmail } from './email.js';
 
+/** Inputs identifying the send whose caps are being evaluated. */
 export interface CheckSendingCapsInput {
   fromEmail: string;
   /** Recipient domain. If omitted, derived from `recipientEmail`. */
@@ -28,6 +29,7 @@ export interface CheckSendingCapsInput {
   sequenceMaxSteps?: number;
 }
 
+/** Result of a cap check: whether allowed, all breached-cap reasons, and raw counts. */
 export interface CheckSendingCapsResult {
   allowed: boolean;
   reasons: string[];

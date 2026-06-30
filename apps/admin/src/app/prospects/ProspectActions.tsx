@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 import type { OutreachSequence } from '../../lib/types';
 
+/** Per-prospect action buttons: trigger research or start an outbound sequence. */
 export function ProspectRowActions({
   prospectId,
   sequences,

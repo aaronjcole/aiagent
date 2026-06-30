@@ -18,6 +18,7 @@ import {
   workflowIds,
 } from '@app/workflows';
 
+/** Identifiers for a started Temporal workflow execution. */
 export interface StartedWorkflow {
   workflowId: string;
   runId: string;

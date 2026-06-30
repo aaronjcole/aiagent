@@ -5,8 +5,10 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { ApprovalItem } from '../../lib/types';
 import { ApprovalActions } from './ApprovalActions';
 
+/** Always render at request time so the pending-approvals list stays live. */
 export const dynamic = 'force-dynamic';
 
+/** Approvals page: lists pending approval items with their drafts and actions. */
 export default async function ApprovalsPage() {
   const res = await read<unknown>('/approvals', { status: 'pending' });
 

@@ -1,8 +1,14 @@
+/**
+ * Research service tests: the happy path stores a ResearchResult and marks the
+ * prospect researched; needs_review/insufficient verdicts raise an approval
+ * item; and an escalating agent flags the prospect needs_review without crashing.
+ */
 import { describe, it, expect } from 'vitest';
 import { ProspectStatus, ResearchStatus } from '@app/shared';
 import { researchProspectService } from './research.js';
 import { FakePrisma, makeDeps, FailingLlmProvider, FixedLlmProvider } from './test-helpers.js';
 
+/** Build a research agent output for the given status. */
 function researchOutput(status: string) {
   return {
     status,
@@ -16,6 +22,7 @@ function researchOutput(status: string) {
   };
 }
 
+/** Seed a company + a NEW prospect for the research flow. */
 function seedProspect(prisma: FakePrisma): void {
   prisma.company.insert({
     id: 'company_1',

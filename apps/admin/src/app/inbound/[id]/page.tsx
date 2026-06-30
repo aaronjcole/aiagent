@@ -4,8 +4,10 @@ import { asArray, fmtDate } from '../../../lib/format';
 import { ApiUnreachable } from '../../../components/ApiError';
 import type { EmailThread, EmailMessage } from '../../../lib/types';
 
+/** Always render at request time so the thread detail reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Thread detail page: shows an email thread's metadata and its messages. */
 export default async function ThreadDetailPage({ params }: { params: { id: string } }) {
   const res = await read<EmailThread>(`/threads/${params.id}`);
 

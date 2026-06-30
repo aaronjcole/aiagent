@@ -4,8 +4,10 @@ import { fmtDate } from '../../../lib/format';
 import { ApiUnreachable } from '../../../components/ApiError';
 import type { DraftEmail } from '../../../lib/types';
 
+/** Always render at request time so the draft detail reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Draft detail page: shows one draft's metadata, body, and compliance flags. */
 export default async function DraftDetailPage({ params }: { params: { id: string } }) {
   const res = await read<DraftEmail>(`/drafts/${params.id}`);
 

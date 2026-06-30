@@ -26,6 +26,11 @@ import {
   workflowsPath,
 } from '@app/workflows';
 
+/**
+ * Worker bootstrap: load config, build and inject the shared `Deps`, connect
+ * to Temporal, create the Worker for the `aiagent` task queue, and run its poll
+ * loop until a SIGINT/SIGTERM drains it.
+ */
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger('worker', { level: config.logLevel });
@@ -71,6 +76,7 @@ async function main(): Promise<void> {
   // Graceful shutdown: `worker.shutdown()` stops polling and drains in-flight
   // activities/workflows; `worker.run()` then resolves and we close the
   // connection. Register handlers BEFORE `run()` so an early signal is honored.
+  /** Stop polling and drain in-flight activities/workflows on a shutdown signal. */
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'received shutdown signal; draining worker');
     worker.shutdown();

@@ -19,6 +19,7 @@ const NAV: ReadonlyArray<{ href: string; label: string }> = [
   { href: '/settings', label: 'Settings' },
 ];
 
+/** Root layout: renders the sidebar nav and wraps every page's content. */
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">

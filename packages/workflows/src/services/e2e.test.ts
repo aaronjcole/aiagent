@@ -31,6 +31,7 @@ import { sendApprovedDraft } from './send.js';
 import { inboundEmailService } from './inbound.js';
 import { FakePrisma, makeDeps } from './test-helpers.js';
 
+/** Filter audit rows down to actual `email.send` entries. */
 const SEND = (rows: { id: string; [k: string]: unknown }[]) =>
   rows.filter((a) => a.action === 'email.send');
 

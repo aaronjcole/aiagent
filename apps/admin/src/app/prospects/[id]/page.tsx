@@ -5,8 +5,10 @@ import { ApiUnreachable, ApiSideWarning } from '../../../components/ApiError';
 import type { Prospect, ResearchResult, OutreachSequence } from '../../../lib/types';
 import { ProspectRowActions } from '../ProspectActions';
 
+/** Always render at request time so the prospect detail reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Prospect detail page: shows prospect info, actions, and its research results. */
 export default async function ProspectDetailPage({ params }: { params: { id: string } }) {
   const [prospectRes, researchRes, sequencesRes] = await Promise.all([
     read<Prospect>(`/prospects/${params.id}`),

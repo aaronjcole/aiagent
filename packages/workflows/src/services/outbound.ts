@@ -37,13 +37,16 @@ import {
 import type { Deps } from '../deps.js';
 import { persistAgentRun, readBooleanSetting, toJson, writeAudit } from './shared.js';
 
+/** Input to {@link outboundSequenceService}: the prospect + sequence to step. */
 export interface OutboundSequenceInput {
   prospectId: string;
   sequenceId: string;
 }
 
+/** Terminal outcome of one outbound step. */
 export type OutboundOutcome = 'sent' | 'pending_approval' | 'ineligible' | 'escalated';
 
+/** Result of one outbound step: outcome plus the draft/approval it produced. */
 export interface OutboundSequenceResult {
   status: OutboundOutcome;
   prospectId: string;

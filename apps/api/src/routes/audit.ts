@@ -4,7 +4,9 @@ import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../context.js';
 import { listAuditLogs } from '../services.js';
 
+/** Register the audit-log route: list audit logs filtered/limited via query params. */
 export function registerAuditRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // GET /audit-logs — list audit logs (?entityType filter, ?limit default 100).
   app.get('/audit-logs', async (req) => {
     const { entityType, limit } = req.query as { entityType?: string; limit?: string };
     const parsed = limit ? Number.parseInt(limit, 10) : NaN;

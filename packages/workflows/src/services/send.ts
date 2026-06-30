@@ -28,12 +28,15 @@ import {
 import type { Deps } from '../deps.js';
 import { readBooleanSetting, writeAudit } from './shared.js';
 
+/** Input to {@link sendApprovedDraft}: the approved draft to send. */
 export interface SendApprovedDraftInput {
   draftId: string;
 }
 
+/** Whether the approved draft was actually sent or blocked by a gate/switch. */
 export type SendApprovedDraftOutcome = 'sent' | 'blocked';
 
+/** Result of the human-approved send path. */
 export interface SendApprovedDraftResult {
   status: SendApprovedDraftOutcome;
   draftId: string;

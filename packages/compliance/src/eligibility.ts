@@ -12,6 +12,7 @@ import type {
 } from './types.js';
 import { isValidEmail } from './email.js';
 
+/** Pre-resolved inputs for {@link checkEligibility} (caller does the I/O). */
 export interface CheckEligibilityInput {
   prospect: ProspectLike | null | undefined;
   research?: ResearchLike | null;
@@ -19,6 +20,7 @@ export interface CheckEligibilityInput {
   suppressionResult?: SuppressionResult;
 }
 
+/** Eligibility verdict plus every blocking reason (empty when eligible). */
 export interface EligibilityResult {
   eligible: boolean;
   reasons: string[];

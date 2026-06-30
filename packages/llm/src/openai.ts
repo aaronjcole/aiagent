@@ -21,6 +21,10 @@ export class OpenAiProvider implements LlmProvider {
     this.client = new OpenAI({ apiKey: args.apiKey });
   }
 
+  /**
+   * Issue one Chat Completions request in JSON-object mode and return the raw
+   * text plus usage. Empty responses and SDK errors surface as {@link ProviderError}.
+   */
   async rawComplete(req: RawCompleteRequest): Promise<RawCompleteResult> {
     const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const userContent =

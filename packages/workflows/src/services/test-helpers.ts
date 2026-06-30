@@ -16,18 +16,22 @@ const silentLogger = createLogger('test', { level: 'silent' });
 /** A simple typed table keyed by id with optional secondary lookups. */
 class Table<T extends { id: string }> {
   rows: T[] = [];
+  /** Append a row and return it. */
   insert(row: T): T {
     this.rows.push(row);
     return row;
   }
+  /** Return the first row matching the predicate, or undefined. */
   find(pred: (r: T) => boolean): T | undefined {
     return this.rows.find(pred);
   }
+  /** Return all rows matching the predicate. */
   filter(pred: (r: T) => boolean): T[] {
     return this.rows.filter(pred);
   }
 }
 
+/** A loosely-typed table row: an id plus arbitrary columns. */
 interface Row {
   id: string;
   [k: string]: unknown;
@@ -73,6 +77,7 @@ export class FakePrisma {
     };
   }
 
+  /** True when every key in `where` matches the row (supports `{ not }`). */
   private matches(row: Row, where: Record<string, unknown>): boolean {
     return Object.entries(where).every(([k, v]) => {
       if (v !== null && typeof v === 'object' && 'not' in (v as object)) {
@@ -82,6 +87,11 @@ export class FakePrisma {
     });
   }
 
+  /**
+   * Build a minimal Prisma-delegate double over a table: implements the
+   * `findUnique`/`findFirst`/`create`/`update`/`upsert`/`count` subset the
+   * services use. `prefix` seeds generated ids.
+   */
   private delegate(table: Table<Row>, prefix: string) {
     const matches = this.matches.bind(this);
     return {
@@ -130,10 +140,12 @@ export class FakePrisma {
     };
   }
 
+  /** Fixed creation timestamp so generated rows are deterministic. */
   private now(): Date {
     return new Date('2026-06-30T12:00:00.000Z');
   }
 
+  /** Apply a `{ company: true }` include (and any `select`) to a found row. */
   private withInclude(row: Row, include: unknown, select: unknown): Row {
     let out: Row = { ...row };
     if (include && typeof include === 'object' && (include as Record<string, unknown>).company) {
@@ -144,6 +156,7 @@ export class FakePrisma {
     return out;
   }
 
+  /** Narrow a row to the keys requested by a Prisma `select`, if any. */
   private project(row: Row, select: unknown): Row {
     if (!select || typeof select !== 'object') return row;
     const out: Record<string, unknown> = {};
@@ -184,6 +197,7 @@ export function makeDeps(prisma: FakePrisma, options: MakeDepsOptions = {}): Dep
 export class FailingLlmProvider implements LlmProvider {
   readonly name = 'mock' as const;
   readonly model = 'mock-fail';
+  /** Always return invalid JSON so the repair loop exhausts and escalates. */
   rawComplete(): Promise<{ text: string; usage: null }> {
     // Always-invalid JSON forces the repair loop to exhaust and escalate.
     return Promise.resolve({ text: 'not json at all', usage: null });
@@ -195,6 +209,7 @@ export class FixedLlmProvider implements LlmProvider {
   readonly name = 'mock' as const;
   readonly model = 'mock-fixed';
   constructor(private readonly payloadByAgent: Record<string, unknown>) {}
+  /** Return the fixed JSON payload registered for the request's `agentType`. */
   rawComplete(req: { agentType?: string }): Promise<{ text: string; usage: null }> {
     const key = req.agentType ?? '';
     const payload = this.payloadByAgent[key];

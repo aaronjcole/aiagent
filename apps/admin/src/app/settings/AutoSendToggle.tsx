@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 
+/** Toggle button that flips the `auto_send_enabled` system setting via the API. */
 export function AutoSendToggle({ initialValue }: { initialValue: boolean }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(initialValue);

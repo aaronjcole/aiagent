@@ -4,6 +4,7 @@ import { fmtConfidence, fmtDate } from '../../../lib/format';
 import { ApiUnreachable } from '../../../components/ApiError';
 import type { ResearchResult } from '../../../lib/types';
 
+/** Always render at request time so the research detail reflects live API data. */
 export const dynamic = 'force-dynamic';
 
 /**
@@ -21,6 +22,7 @@ function safeExternalHref(value?: string | null): string | null {
   }
 }
 
+/** Research detail page: shows a result's summary, personalization, and sources. */
 export default async function ResearchDetailPage({ params }: { params: { id: string } }) {
   const res = await read<ResearchResult>(`/research/${params.id}`);
 

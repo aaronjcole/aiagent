@@ -15,6 +15,10 @@ import { ProspectStatus, loadConfig } from '@app/shared';
 const DEMO_DOMAIN = 'acme.example.com';
 const SEQUENCE_NAME = 'Default Outbound';
 
+/**
+ * Seed the database with the idempotent demo dataset: a Company, demo prospects,
+ * the "Default Outbound" sequence + steps, and default SystemSettings.
+ */
 async function main(): Promise<void> {
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required to seed the database');

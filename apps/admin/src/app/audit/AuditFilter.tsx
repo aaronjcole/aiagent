@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+/** Filter form that updates the audit page's entityType/limit query params. */
 export function AuditFilter({ entityType, limit }: { entityType: string; limit: number }) {
   const router = useRouter();
   const [value, setValue] = useState(entityType);

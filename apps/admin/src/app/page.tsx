@@ -4,8 +4,10 @@ import { asArray, fmtDate } from '../lib/format';
 import { ApiUnreachable } from '../components/ApiError';
 import type { AuditLog, Prospect, ApprovalItem, DraftEmail, SuppressionEntry } from '../lib/types';
 
+/** Always render at request time so dashboard counts reflect live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Dashboard page: shows entity count cards and the most recent audit logs. */
 export default async function DashboardPage() {
   const [prospects, approvals, drafts, suppression, audit] = await Promise.all([
     read<unknown>('/prospects'),

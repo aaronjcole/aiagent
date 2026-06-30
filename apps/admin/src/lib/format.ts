@@ -1,5 +1,6 @@
 /** Small display helpers shared across pages. */
 
+/** Format an ISO date string for display, or `—` when absent/invalid. */
 export function fmtDate(value?: string | null): string {
   if (!value) return '—';
   const d = new Date(value);
@@ -7,11 +8,13 @@ export function fmtDate(value?: string | null): string {
   return d.toLocaleString();
 }
 
+/** Format a 0–1 confidence value as a percentage, or `—` when absent. */
 export function fmtConfidence(value?: number | null): string {
   if (value === undefined || value === null) return '—';
   return `${Math.round(value * 100)}%`;
 }
 
+/** Best display name for a prospect: full name, joined first/last, else email. */
 export function prospectName(p: {
   fullName?: string | null;
   firstName?: string | null;

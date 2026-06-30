@@ -22,6 +22,7 @@ export interface ConfirmedSlot {
   endIso: string;
 }
 
+/** Input to {@link confirmAndCreateCalendarEvent}: the confirmed slot + guards. */
 export interface ConfirmAndCreateInput {
   /** The PROPOSED CalendarEvent row id to confirm. */
   calendarEventId: string;
@@ -41,6 +42,7 @@ export interface ConfirmAndCreateInput {
   attendees: { email: string; name?: string }[];
 }
 
+/** Result: whether a provider event was created, with the ids/blocking reason. */
 export interface ConfirmAndCreateResult {
   created: boolean;
   calendarEventId: string;
@@ -136,16 +138,14 @@ function checkGuards(input: ConfirmAndCreateInput): string | null {
   return null;
 }
 
+/** True iff `value` parses to a finite (valid) date. */
 function isIso(value: string): boolean {
   if (typeof value !== 'string' || value.length === 0) return false;
   const t = new Date(value).getTime();
   return Number.isFinite(t);
 }
 
-/**
- * Persist a PROPOSED `CalendarEvent` row (no provider call). Returns the row id
- * and the idempotency key. Idempotent on the key.
- */
+/** Input for {@link proposeCalendarEvent}. */
 export interface ProposeEventInput {
   prospectId?: string;
   threadId?: string;
@@ -157,6 +157,10 @@ export interface ProposeEventInput {
   idempotencyKey: string;
 }
 
+/**
+ * Persist a PROPOSED `CalendarEvent` row (no provider call). Returns the row id.
+ * Idempotent on the supplied key; throws {@link ValidationError} if it's absent.
+ */
 export async function proposeCalendarEvent(
   deps: Deps,
   input: ProposeEventInput,

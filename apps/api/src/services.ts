@@ -27,6 +27,7 @@ function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
+/** Shape of a single audit-log entry passed to {@link writeAudit}. */
 interface AuditInput {
   action: string;
   actorType?: ActorType;
@@ -60,6 +61,7 @@ async function writeAudit(prisma: PrismaClient, input: AuditInput): Promise<void
 // Prospects
 // ---------------------------------------------------------------------------
 
+/** List all prospects, newest first, each with its related company. */
 export async function listProspects(prisma: PrismaClient) {
   return prisma.prospect.findMany({
     orderBy: { createdAt: 'desc' },
@@ -67,6 +69,7 @@ export async function listProspects(prisma: PrismaClient) {
   });
 }
 
+/** Fetch one prospect (with company) by id; throws NotFoundError if missing. */
 export async function getProspect(prisma: PrismaClient, id: string) {
   const prospect = await prisma.prospect.findUnique({
     where: { id },
@@ -76,6 +79,7 @@ export async function getProspect(prisma: PrismaClient, id: string) {
   return prospect;
 }
 
+/** Input accepted by {@link createProspect}. */
 export interface CreateProspectInput {
   email: string;
   firstName?: string;
@@ -131,6 +135,7 @@ export async function createProspect(prisma: PrismaClient, input: CreateProspect
 // Research
 // ---------------------------------------------------------------------------
 
+/** List research results, newest first, optionally filtered by prospect. */
 export async function listResearch(prisma: PrismaClient, prospectId?: string) {
   return prisma.researchResult.findMany({
     where: prospectId ? { prospectId } : undefined,
@@ -138,6 +143,7 @@ export async function listResearch(prisma: PrismaClient, prospectId?: string) {
   });
 }
 
+/** Fetch one research result by id; throws NotFoundError if missing. */
 export async function getResearch(prisma: PrismaClient, id: string) {
   const row = await prisma.researchResult.findUnique({ where: { id } });
   if (!row) throw new NotFoundError(`research result not found: ${id}`, { id });
@@ -148,6 +154,7 @@ export async function getResearch(prisma: PrismaClient, id: string) {
 // Sequences
 // ---------------------------------------------------------------------------
 
+/** List outreach sequences, newest first, each with its ordered steps. */
 export async function listSequences(prisma: PrismaClient) {
   return prisma.outreachSequence.findMany({
     orderBy: { createdAt: 'desc' },
@@ -159,6 +166,7 @@ export async function listSequences(prisma: PrismaClient) {
 // Drafts
 // ---------------------------------------------------------------------------
 
+/** List draft emails, newest first, optionally filtered by status. */
 export async function listDrafts(prisma: PrismaClient, status?: string) {
   return prisma.draftEmail.findMany({
     where: status ? { status: status as DraftStatus } : undefined,
@@ -166,6 +174,7 @@ export async function listDrafts(prisma: PrismaClient, status?: string) {
   });
 }
 
+/** Fetch one draft email by id; throws NotFoundError if missing. */
 export async function getDraft(prisma: PrismaClient, id: string) {
   const row = await prisma.draftEmail.findUnique({ where: { id } });
   if (!row) throw new NotFoundError(`draft not found: ${id}`, { id });
@@ -176,6 +185,7 @@ export async function getDraft(prisma: PrismaClient, id: string) {
 // Approvals
 // ---------------------------------------------------------------------------
 
+/** List approval items by status (default PENDING), newest first, with their draft. */
 export async function listApprovals(
   prisma: PrismaClient,
   status: ApprovalStatus = ApprovalStatus.PENDING,
@@ -187,6 +197,7 @@ export async function listApprovals(
   });
 }
 
+/** Decision metadata for approving/rejecting an approval item. */
 export interface ApprovalDecisionInput {
   reason?: string;
   actor?: string;
@@ -292,6 +303,7 @@ export async function rejectApproval(
 // Threads
 // ---------------------------------------------------------------------------
 
+/** List email threads, most-recently-active first, each with its prospect. */
 export async function listThreads(prisma: PrismaClient) {
   return prisma.emailThread.findMany({
     orderBy: { lastMessageAt: 'desc' },
@@ -299,6 +311,7 @@ export async function listThreads(prisma: PrismaClient) {
   });
 }
 
+/** Fetch one thread (with its messages + prospect) by id; throws if missing. */
 export async function getThread(prisma: PrismaClient, id: string) {
   const row = await prisma.emailThread.findUnique({
     where: { id },
@@ -312,10 +325,12 @@ export async function getThread(prisma: PrismaClient, id: string) {
 // Suppression
 // ---------------------------------------------------------------------------
 
+/** List all suppression entries, newest first. */
 export async function listSuppression(prisma: PrismaClient) {
   return prisma.suppressionEntry.findMany({ orderBy: { createdAt: 'desc' } });
 }
 
+/** Input accepted by {@link addSuppressionEntry} (email and/or domain). */
 export interface AddSuppressionApiInput {
   email?: string;
   domain?: string;
@@ -382,6 +397,7 @@ export async function removeSuppressionEntry(prisma: PrismaClient, id: string) {
 // Audit logs
 // ---------------------------------------------------------------------------
 
+/** List audit logs (newest first), optionally by entityType; limit clamped to 1–500. */
 export async function listAuditLogs(prisma: PrismaClient, entityType?: string, limit = 100) {
   return prisma.auditLog.findMany({
     where: entityType ? { entityType } : undefined,
@@ -394,6 +410,7 @@ export async function listAuditLogs(prisma: PrismaClient, entityType?: string, l
 // Settings
 // ---------------------------------------------------------------------------
 
+/** List all system settings, sorted by key. */
 export async function listSettings(prisma: PrismaClient) {
   return prisma.systemSetting.findMany({ orderBy: { key: 'asc' } });
 }

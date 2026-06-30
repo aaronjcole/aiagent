@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 
+/** Approve/reject buttons (with optional reason) for a pending approval item. */
 export function ApprovalActions({ approvalId }: { approvalId: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState<null | 'approve' | 'reject'>(null);

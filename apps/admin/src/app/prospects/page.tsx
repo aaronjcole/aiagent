@@ -6,8 +6,10 @@ import type { Prospect, OutreachSequence } from '../../lib/types';
 import { ProspectRowActions } from './ProspectActions';
 import { CreateProspect } from './CreateProspect';
 
+/** Always render at request time so the prospects list reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Prospects page: form to add a prospect plus a table of existing prospects. */
 export default async function ProspectsPage() {
   const [prospectsRes, sequencesRes] = await Promise.all([
     read<unknown>('/prospects'),
@@ -46,6 +48,7 @@ export default async function ProspectsPage() {
   );
 }
 
+/** Render the prospects table (or empty-state copy) with per-row actions. */
 function ProspectsTable({ prospects, sequences }: { prospects: Prospect[]; sequences: OutreachSequence[] }) {
   if (prospects.length === 0) {
     return <p className="muted">No prospects yet. Create one above.</p>;

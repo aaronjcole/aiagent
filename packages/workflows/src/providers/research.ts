@@ -66,6 +66,7 @@ function companyNameFromDomain(domain: string): string {
 export class MockResearchProvider implements ResearchProvider {
   readonly name = 'mock' as const;
 
+  /** Return a single deterministic search source derived from the query. */
   searchWeb(query: string): Promise<ResearchSource[]> {
     const slug = encodeURIComponent(query.trim().toLowerCase().replace(/\s+/g, '-')) || 'query';
     return Promise.resolve([
@@ -77,6 +78,7 @@ export class MockResearchProvider implements ResearchProvider {
     ]);
   }
 
+  /** Return deterministic, plausible enrichment + sources for a company domain. */
   enrichCompany(domain: string): Promise<CompanyEnrichment> {
     const d = domain.trim().toLowerCase();
     const name = companyNameFromDomain(d);
@@ -100,6 +102,7 @@ export class MockResearchProvider implements ResearchProvider {
     });
   }
 
+  /** Return deterministic enrichment + a public-profile source for a person. */
   enrichPerson(query: PersonQuery): Promise<PersonEnrichment> {
     const email = query.email?.trim().toLowerCase();
     const name = query.name?.trim() ?? (email ? email.split('@')[0] : undefined);
@@ -125,16 +128,19 @@ export class MockResearchProvider implements ResearchProvider {
 export class LiveResearchProvider implements ResearchProvider {
   readonly name = 'live' as const;
 
+  /** Not yet wired up: rejects with {@link ProviderError}. */
   searchWeb(): Promise<ResearchSource[]> {
     return Promise.reject(
       new ProviderError('live research provider not configured', { provider: 'live' }),
     );
   }
+  /** Not yet wired up: rejects with {@link ProviderError}. */
   enrichCompany(): Promise<CompanyEnrichment> {
     return Promise.reject(
       new ProviderError('live research provider not configured', { provider: 'live' }),
     );
   }
+  /** Not yet wired up: rejects with {@link ProviderError}. */
   enrichPerson(): Promise<PersonEnrichment> {
     return Promise.reject(
       new ProviderError('live research provider not configured', { provider: 'live' }),

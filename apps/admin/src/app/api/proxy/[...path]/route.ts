@@ -9,8 +9,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { API_BASE_URL } from '../../../../lib/api';
 
+/** Force dynamic handling so every proxied request hits the live upstream API. */
 export const dynamic = 'force-dynamic';
 
+/** Forward a request to the upstream API and relay its status/body (with timeout). */
 async function forward(req: NextRequest, path: string[]): Promise<NextResponse> {
   const search = req.nextUrl.search;
   const target = `${API_BASE_URL}/${path.join('/')}${search}`;
@@ -52,19 +54,24 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
   }
 }
 
+/** Route context carrying the catch-all `path` segments. */
 interface Ctx {
   params: { path: string[] };
 }
 
+/** Proxy a GET request to the upstream API. */
 export async function GET(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   return forward(req, params.path);
 }
+/** Proxy a POST request to the upstream API. */
 export async function POST(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   return forward(req, params.path);
 }
+/** Proxy a PUT request to the upstream API. */
 export async function PUT(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   return forward(req, params.path);
 }
+/** Proxy a DELETE request to the upstream API. */
 export async function DELETE(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   return forward(req, params.path);
 }

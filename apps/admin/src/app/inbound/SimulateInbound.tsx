@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 
+/** Form that posts a simulated inbound email to /inbound/simulate (demo tooling). */
 export function SimulateInbound() {
   const router = useRouter();
   const [from, setFrom] = useState('prospect@example.com');

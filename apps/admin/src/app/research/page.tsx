@@ -4,8 +4,10 @@ import { asArray, fmtConfidence, fmtDate } from '../../lib/format';
 import { ApiUnreachable } from '../../components/ApiError';
 import type { ResearchResult } from '../../lib/types';
 
+/** Always render at request time so the research list reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Research page: lists all research results in a table. */
 export default async function ResearchPage() {
   const res = await read<unknown>('/research');
 

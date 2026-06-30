@@ -4,10 +4,12 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { SystemSetting, Json } from '../../lib/types';
 import { AutoSendToggle } from './AutoSendToggle';
 
+/** Always render at request time so settings reflect live API data. */
 export const dynamic = 'force-dynamic';
 
 const AUTO_SEND_KEY = 'auto_send_enabled';
 
+/** Coerce a JSON setting value (bool/string/number/wrapped) to a boolean. */
 function isTruthy(value: Json | undefined): boolean {
   if (value === true) return true;
   if (typeof value === 'string') return value.toLowerCase() === 'true' || value === '1';
@@ -19,10 +21,12 @@ function isTruthy(value: Json | undefined): boolean {
   return false;
 }
 
+/** Render a JSON setting value as a display string. */
 function renderValue(value: Json): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
+/** Settings page: auto-send toggle plus a table of all system settings. */
 export default async function SettingsPage() {
   const res = await read<unknown>('/settings');
 

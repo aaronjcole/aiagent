@@ -6,6 +6,7 @@
 
 import type { FooterConfig } from './types.js';
 
+/** Outcome of {@link ensureFooter}: the (possibly amended) body and what changed. */
 export interface EnsureFooterResult {
   body: string;
   /** True if any footer content was appended. */

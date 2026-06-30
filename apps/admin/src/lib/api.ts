@@ -12,6 +12,7 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, '') ?? 'http://localhost:3001';
 
+/** Error thrown for a failed API request, carrying the HTTP status and raw body. */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: string;
@@ -23,6 +24,7 @@ export class ApiError extends Error {
   }
 }
 
+/** Options for a single low-level API request. */
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
@@ -30,6 +32,7 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined>;
 }
 
+/** Build an absolute API URL from a path and optional query params. */
 function buildUrl(path: string, query?: RequestOptions['query']): string {
   const url = new URL(`${API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`);
   if (query) {
@@ -40,6 +43,7 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
   return url.toString();
 }
 
+/** Perform an API request, parsing JSON and throwing {@link ApiError} on failure. */
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, query } = options;
   let res: Response;

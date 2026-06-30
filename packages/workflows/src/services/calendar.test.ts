@@ -1,3 +1,8 @@
+/**
+ * Calendar service tests: guards block provider event creation (no confirmation,
+ * invalid timezone) and keep the event PROPOSED, while a fully-guarded confirm
+ * creates the event idempotently; `proposeCalendarEvent` is idempotent on its key.
+ */
 import { describe, it, expect } from 'vitest';
 import { idempotencyKey } from '@app/shared';
 import { confirmAndCreateCalendarEvent, proposeCalendarEvent } from './calendar.js';

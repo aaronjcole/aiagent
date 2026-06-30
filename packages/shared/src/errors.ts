@@ -4,6 +4,7 @@
  * as the discriminant for narrowing.
  */
 
+/** Stable machine-readable error codes carried by every {@link AppError}. */
 export type ErrorCode =
   | 'APP_ERROR'
   | 'VALIDATION_ERROR'
@@ -13,6 +14,7 @@ export type ErrorCode =
   | 'PROVIDER_ERROR'
   | 'IDEMPOTENCY_ERROR';
 
+/** Base class for all application errors; carries a code, HTTP status, and optional details. */
 export abstract class AppError extends Error {
   abstract readonly code: ErrorCode;
   abstract readonly httpStatus: number;
@@ -26,6 +28,7 @@ export abstract class AppError extends Error {
     this.details = details;
   }
 
+  /** Serialize to a plain object safe for API responses and logs. */
   toJSON(): { name: string; code: ErrorCode; httpStatus: number; message: string; details?: unknown } {
     return {
       name: this.name,

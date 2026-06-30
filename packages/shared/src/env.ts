@@ -11,6 +11,7 @@ const boolFromString = z
     return ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase());
   });
 
+/** Coerce a numeric env string into a non-negative integer with a default. */
 const intFromString = (def: number) =>
   z
     .union([z.number(), z.string()])
@@ -18,6 +19,7 @@ const intFromString = (def: number) =>
     .pipe(z.number().int().nonnegative())
     .default(def);
 
+/** Zod schema validating and defaulting all runtime configuration. */
 export const ConfigSchema = z.object({
   nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
   logLevel: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -75,6 +77,7 @@ export const ConfigSchema = z.object({
   adminPort: intFromString(3000),
 });
 
+/** Fully parsed, typed application configuration. */
 export type Config = z.infer<typeof ConfigSchema>;
 
 /** Keys in Config that hold secret values and must be redacted before logging. */

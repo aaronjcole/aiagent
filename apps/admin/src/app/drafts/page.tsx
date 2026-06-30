@@ -5,8 +5,10 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { DraftEmail } from '../../lib/types';
 import { DraftStatusFilter } from './DraftStatusFilter';
 
+/** Always render at request time so the drafts list reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Drafts page: lists draft emails in a table, filterable by status. */
 export default async function DraftsPage({ searchParams }: { searchParams: { status?: string } }) {
   const status = searchParams.status ?? '';
   const res = await read<unknown>('/drafts', { status: status || undefined });

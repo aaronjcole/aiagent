@@ -5,8 +5,10 @@ import { ApiUnreachable } from '../../components/ApiError';
 import type { EmailThread } from '../../lib/types';
 import { SimulateInbound } from './SimulateInbound';
 
+/** Always render at request time so the threads list reflects live API data. */
 export const dynamic = 'force-dynamic';
 
+/** Inbound page: simulate an inbound email and list existing email threads. */
 export default async function InboundPage() {
   const res = await read<unknown>('/threads');
   const threads = res.ok ? asArray<EmailThread>(res.data) : null;

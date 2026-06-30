@@ -11,12 +11,15 @@ import { startSendApprovedDraft } from '../start-workflows.js';
 // invalid values → 400.
 const ListQuery = z.object({ status: z.nativeEnum(DraftStatus).optional() });
 
+/** Register the draft routes: list/get drafts and start the approved-send workflow. */
 export function registerDraftRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // GET /drafts — list drafts, optionally filtered by ?status.
   app.get('/drafts', async (req) => {
     const { status } = ListQuery.parse(req.query);
     return listDrafts(ctx.prisma, status);
   });
 
+  // GET /drafts/:id — fetch one draft by id (404 if missing).
   app.get('/drafts/:id', async (req) => {
     const { id } = req.params as { id: string };
     return getDraft(ctx.prisma, id);

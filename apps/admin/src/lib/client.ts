@@ -6,6 +6,7 @@
  * mutating actions.
  */
 
+/** Issue a request through the same-origin proxy, throwing on a non-OK response. */
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/proxy${path.startsWith('/') ? path : `/${path}`}`, {
     method,
@@ -27,6 +28,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return JSON.parse(text) as T;
 }
 
+/** Browser-side API client (GET/POST/PUT/DELETE) routed via the proxy. */
 export const client = {
   get: <T>(path: string) => call<T>('GET', path),
   post: <T>(path: string, body?: unknown) => call<T>('POST', path, body),

@@ -20,6 +20,7 @@ import type {
 /** Any JSON value returned by the API. */
 export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
+/** A sales prospect as exposed by the API. */
 export interface Prospect {
   id: string;
   email: string;
@@ -35,12 +36,14 @@ export interface Prospect {
   updatedAt?: string;
 }
 
+/** A cited source backing a research result. */
 export interface ResearchSource {
   title?: string;
   url?: string;
   snippet?: string;
 }
 
+/** Structured output produced by the research agent. */
 export interface ResearchOutput {
   status?: ResearchStatus | string;
   summary?: string;
@@ -52,6 +55,7 @@ export interface ResearchOutput {
   riskFlags?: string[];
 }
 
+/** A persisted research result row for a prospect. */
 export interface ResearchResult {
   id: string;
   prospectId: string;
@@ -62,6 +66,7 @@ export interface ResearchResult {
   createdAt?: string;
 }
 
+/** A draft email (outreach or reply) awaiting review/approval/send. */
 export interface DraftEmail {
   id: string;
   prospectId?: string | null;
@@ -76,6 +81,7 @@ export interface DraftEmail {
   createdAt?: string;
 }
 
+/** A human-in-the-loop approval item, optionally linked to a draft. */
 export interface ApprovalItem {
   id: string;
   type: ApprovalType | string;
@@ -88,6 +94,7 @@ export interface ApprovalItem {
   createdAt?: string;
 }
 
+/** A single message within an email thread. */
 export interface EmailMessage {
   id: string;
   threadId?: string | null;
@@ -101,6 +108,7 @@ export interface EmailMessage {
   receivedAt?: string | null;
 }
 
+/** An email thread with its prospect, classification, and messages. */
 export interface EmailThread {
   id: string;
   subject?: string | null;
@@ -112,6 +120,7 @@ export interface EmailThread {
   createdAt?: string;
 }
 
+/** A suppression-list entry blocking sends to an email or domain. */
 export interface SuppressionEntry {
   id: string;
   email?: string | null;
@@ -121,6 +130,7 @@ export interface SuppressionEntry {
   createdAt?: string;
 }
 
+/** An audit-log row recording a system or human decision. */
 export interface AuditLog {
   id: string;
   entityType?: string | null;
@@ -134,6 +144,7 @@ export interface AuditLog {
   createdAt?: string;
 }
 
+/** A configurable system setting (key/value with optional metadata). */
 export interface SystemSetting {
   key: string;
   value: Json;
@@ -141,6 +152,7 @@ export interface SystemSetting {
   updatedAt?: string;
 }
 
+/** An outreach sequence definition. */
 export interface OutreachSequence {
   id: string;
   name?: string | null;

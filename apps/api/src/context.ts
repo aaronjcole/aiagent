@@ -36,6 +36,10 @@ export interface AppContext {
   close(): Promise<void>;
 }
 
+/**
+ * Build the process-wide {@link AppContext}: loads config, creates the logger,
+ * and wires lazily-initialized Temporal client / Deps / mock-email accessors.
+ */
 export function createAppContext(): AppContext {
   const config = loadConfig();
   const logger = createLogger('api', { level: config.logLevel });

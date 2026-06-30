@@ -33,7 +33,10 @@ const InboundBody = z.object({
   providerMessageId: z.string().optional(),
 });
 
+/** Register the inbound simulation route (mock-provider, in-process demo tooling). */
 export function registerInboundRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // POST /inbound/simulate — preseed the mock provider with a fake inbound
+  // message, then start the inbound workflow (requires EMAIL_PROVIDER=mock).
   app.post('/inbound/simulate', async (req) => {
     const input = InboundBody.parse(req.body);
 

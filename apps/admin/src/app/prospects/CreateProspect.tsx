@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { client } from '../../lib/client';
 
+/** Form for creating a new prospect via the API. */
 export function CreateProspect() {
   const router = useRouter();
   const [email, setEmail] = useState('');
