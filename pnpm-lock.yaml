@@ -161,18 +161,6 @@ importers:
 
   packages/agents:
     dependencies:
-      '@app/calendar':
-        specifier: workspace:*
-        version: link:../calendar
-      '@app/compliance':
-        specifier: workspace:*
-        version: link:../compliance
-      '@app/db':
-        specifier: workspace:*
-        version: link:../db
-      '@app/email':
-        specifier: workspace:*
-        version: link:../email
       '@app/llm':
         specifier: workspace:*
         version: link:../llm

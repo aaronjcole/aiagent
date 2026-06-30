@@ -36,7 +36,7 @@ function baseArgs(overrides: Partial<RunOutboundGatesArgs> = {}): RunOutboundGat
       unsubscribeBaseUrl: 'https://example.com/unsubscribe',
       companyAddress: '123 Example St, City, ST 00000, USA',
     },
-    config: { autoSendEnabled: false },
+    config: { autoSendEnabled: false, sendingEnabled: true },
     systemAutoSendSetting: false,
     ...overrides,
   };
@@ -83,16 +83,33 @@ describe('runOutboundGates', () => {
 
   it('auto-send ON (env + system setting) with all gates passing -> canAutoSend', async () => {
     const r = await runOutboundGates(
-      baseArgs({ config: { autoSendEnabled: true }, systemAutoSendSetting: true }),
+      baseArgs({ config: { autoSendEnabled: true, sendingEnabled: true }, systemAutoSendSetting: true }),
     );
     expect(r.allowed).toBe(true);
     expect(r.canAutoSend).toBe(true);
     expect(r.requiresApproval).toBe(false);
+    expect(gate(r.decisions, 'sending_enabled')).toBe(true);
+  });
+
+  it('master kill switch off forces no auto-send + approval, draft still allowed', async () => {
+    const r = await runOutboundGates(
+      baseArgs({
+        config: { autoSendEnabled: true, sendingEnabled: false },
+        systemAutoSendSetting: true,
+      }),
+    );
+    // Hard gates still pass: a draft + approval item are still created.
+    expect(r.allowed).toBe(true);
+    expect(r.canAutoSend).toBe(false);
+    expect(r.requiresApproval).toBe(true);
+    // The sending_enabled decision is present and failed.
+    expect(r.decisions.some((d) => d.gate === 'sending_enabled')).toBe(true);
+    expect(gate(r.decisions, 'sending_enabled')).toBe(false);
   });
 
   it('NEVER auto-sends when env flag is on but system setting is off', async () => {
     const r = await runOutboundGates(
-      baseArgs({ config: { autoSendEnabled: true }, systemAutoSendSetting: false }),
+      baseArgs({ config: { autoSendEnabled: true, sendingEnabled: true }, systemAutoSendSetting: false }),
     );
     expect(r.canAutoSend).toBe(false);
     expect(r.requiresApproval).toBe(true);
@@ -100,7 +117,7 @@ describe('runOutboundGates', () => {
 
   it('NEVER auto-sends when system setting is on but env flag is off', async () => {
     const r = await runOutboundGates(
-      baseArgs({ config: { autoSendEnabled: false }, systemAutoSendSetting: true }),
+      baseArgs({ config: { autoSendEnabled: false, sendingEnabled: true }, systemAutoSendSetting: true }),
     );
     expect(r.canAutoSend).toBe(false);
     expect(r.requiresApproval).toBe(true);
@@ -119,7 +136,7 @@ describe('runOutboundGates', () => {
     const r = await runOutboundGates(
       baseArgs({
         suppressionRepo: repo,
-        config: { autoSendEnabled: true },
+        config: { autoSendEnabled: true, sendingEnabled: true },
         systemAutoSendSetting: true,
       }),
     );

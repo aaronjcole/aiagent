@@ -155,4 +155,27 @@ describe('outboundSequenceService', () => {
     expect(again.status).toBe('sent');
     expect(prisma.draftEmail.rows).toHaveLength(1);
   });
+
+  it('auto-send env + setting ON but SENDING_ENABLED off: NO send, approval created', async () => {
+    const prisma = new FakePrisma();
+    seed(prisma);
+    const deps = makeDeps(prisma, {
+      llmProvider: llm(passReview()),
+      // Auto-send fully enabled, but the master kill switch is OFF.
+      config: { autoSendEnabled: true, sendingEnabled: false },
+    });
+    prisma.systemSetting.insert({ id: 'set1', key: 'auto_send_enabled', value: true });
+
+    const result = await outboundSequenceService(deps, { prospectId: 'p1', sequenceId: 's1' });
+
+    expect(result.status).toBe('pending_approval');
+    expect(prisma.draftEmail.rows[0]!.status).toBe(DraftStatus.PENDING_REVIEW);
+    // No outbound send happened, and no send audit was written.
+    expect(prisma.auditLog.rows.some((a) => a.action === 'email.send')).toBe(false);
+    // An approval item was created for the outreach send.
+    expect(prisma.approvalItem.rows.some((a) => a.type === 'outreach_send')).toBe(true);
+    // The sending_enabled gate is recorded as failed.
+    const switchGate = prisma.auditLog.rows.find((a) => a.action === 'outbound.gate.sending_enabled');
+    expect(switchGate!.allowed).toBe(false);
+  });
 });

@@ -247,7 +247,10 @@ export async function outboundSequenceService(
       unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl,
       companyAddress: deps.config.companyAddress,
     },
-    config: { autoSendEnabled: deps.config.autoSendEnabled },
+    config: {
+      autoSendEnabled: deps.config.autoSendEnabled,
+      sendingEnabled: deps.config.sendingEnabled,
+    },
     systemAutoSendSetting: systemAutoSend,
     hasHumanApproval: false,
   });
@@ -299,7 +302,10 @@ export async function outboundSequenceService(
   });
 
   // --- Auto-send vs. approval ---
-  if (gateResult.canAutoSend) {
+  // Defense-in-depth: even though `canAutoSend` already accounts for the master
+  // kill switch, re-check `config.sendingEnabled` at the actual send site so a
+  // safety-critical action can never fire while the switch is off.
+  if (gateResult.canAutoSend && deps.config.sendingEnabled) {
     const sendResult = await deps.email.sendMessage({
       to: [{ email: prospect.email }],
       from: { email: deps.config.defaultFromEmail, name: deps.config.defaultFromName },
