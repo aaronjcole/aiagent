@@ -1,0 +1,19 @@
+# Minimal Temporal dynamic config for local development.
+# Mounted into the temporal auto-setup container at
+# /etc/temporal/config/dynamicconfig/development.yaml and referenced via the
+# DYNAMIC_CONFIG_FILE_PATH env var. Keep this lean — it only relaxes a couple of
+# limits that are convenient when running everything on one box.
+
+# Allow the Web UI / SDK to use the search-attributes & advanced visibility that
+# the bundled Postgres visibility store supports.
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}
+
+# Generous namespace + rate limits for a single-developer setup.
+frontend.enableClientVersionCheck:
+  - value: true
+    constraints: {}
+limit.maxIDLength:
+  - value: 255
+    constraints: {}

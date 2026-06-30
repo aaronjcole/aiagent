@@ -1,0 +1,36 @@
+/** Small display helpers shared across pages. */
+
+export function fmtDate(value?: string | null): string {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString();
+}
+
+export function fmtConfidence(value?: number | null): string {
+  if (value === undefined || value === null) return '—';
+  return `${Math.round(value * 100)}%`;
+}
+
+export function prospectName(p: {
+  fullName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  email: string;
+}): string {
+  if (p.fullName) return p.fullName;
+  const joined = [p.firstName, p.lastName].filter(Boolean).join(' ').trim();
+  return joined || p.email;
+}
+
+/** Tolerantly extract an array from common API envelope shapes. */
+export function asArray<T>(data: unknown): T[] {
+  if (Array.isArray(data)) return data as T[];
+  if (data && typeof data === 'object') {
+    for (const key of ['data', 'items', 'results', 'rows']) {
+      const v = (data as Record<string, unknown>)[key];
+      if (Array.isArray(v)) return v as T[];
+    }
+  }
+  return [];
+}

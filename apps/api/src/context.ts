@@ -1,0 +1,91 @@
+/**
+ * Process-wide application context for the API.
+ *
+ * Holds the config, logger, the prisma client (reads), a lazily-connected
+ * Temporal `Client` (used to START workflows), and a lazily-built `Deps` bundle.
+ * The `Deps` bundle is reused for two things:
+ *   - the mock email provider instance, into which `/inbound/simulate` preseeds
+ *     a simulated inbound message, and
+ *   - direct service-function calls (the demo's `--no-temporal` mode), so the
+ *     API can drive the real orchestration without a Temporal server.
+ *
+ * Everything is lazy so the server can boot (and answer `/health`) even if
+ * Temporal is down; the client only connects on the first workflow start.
+ */
+
+import { Client, Connection } from '@temporalio/client';
+import { prisma, type PrismaClient } from '@app/db';
+import { createLogger, loadConfig, type Config, type Logger } from '@app/shared';
+import { createDeps, type Deps } from '@app/workflows';
+import { MockEmailProvider } from '@app/email';
+
+export interface AppContext {
+  readonly config: Config;
+  readonly logger: Logger;
+  readonly prisma: PrismaClient;
+  /** Lazily-connected Temporal client used to START workflows. */
+  getTemporalClient(): Promise<Client>;
+  /** Lazily-built shared Deps (real prisma + providers + llm). */
+  getDeps(): Promise<Deps>;
+  /**
+   * The mock email provider instance (when `EMAIL_PROVIDER=mock`), so inbound
+   * simulation can preseed a thread. Throws if the configured provider is not
+   * the mock.
+   */
+  getMockEmail(): Promise<MockEmailProvider>;
+  close(): Promise<void>;
+}
+
+export function createAppContext(): AppContext {
+  const config = loadConfig();
+  const logger = createLogger('api', { level: config.logLevel });
+
+  let clientPromise: Promise<Client> | undefined;
+  let depsPromise: Promise<Deps> | undefined;
+  let connection: Connection | undefined;
+
+  async function getTemporalClient(): Promise<Client> {
+    if (!clientPromise) {
+      clientPromise = (async () => {
+        connection = await Connection.connect({ address: config.temporalAddress });
+        return new Client({ connection });
+      })();
+    }
+    return clientPromise;
+  }
+
+  async function getDeps(): Promise<Deps> {
+    if (!depsPromise) {
+      // Reuse the shared prisma singleton + this context's config/logger so the
+      // mock email provider is a single shared instance.
+      depsPromise = createDeps({ config, logger, prisma });
+    }
+    return depsPromise;
+  }
+
+  async function getMockEmail(): Promise<MockEmailProvider> {
+    const deps = await getDeps();
+    if (!(deps.email instanceof MockEmailProvider)) {
+      throw new Error(
+        `inbound simulation requires EMAIL_PROVIDER=mock (got "${deps.email.name}")`,
+      );
+    }
+    return deps.email;
+  }
+
+  async function close(): Promise<void> {
+    if (connection) {
+      await connection.close();
+    }
+  }
+
+  return {
+    config,
+    logger,
+    prisma,
+    getTemporalClient,
+    getDeps,
+    getMockEmail,
+    close,
+  };
+}

@@ -44,9 +44,6 @@ importers:
 
   apps/admin:
     dependencies:
-      '@app/db':
-        specifier: workspace:*
-        version: link:../../packages/db
       '@app/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -84,6 +81,9 @@ importers:
       '@app/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@app/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@app/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -327,10 +327,16 @@ importers:
       '@app/email':
         specifier: workspace:*
         version: link:../email
+      '@app/llm':
+        specifier: workspace:*
+        version: link:../llm
       '@app/shared':
         specifier: workspace:*
         version: link:../shared
       '@temporalio/activity':
+        specifier: ^1.11.1
+        version: 1.18.1
+      '@temporalio/common':
         specifier: ^1.11.1
         version: 1.18.1
       '@temporalio/workflow':

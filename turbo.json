@@ -1,5 +1,16 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "PRISMA_QUERY_ENGINE_LIBRARY",
+    "PRISMA_SCHEMA_ENGINE_BINARY",
+    "PRISMA_ENGINES_MIRROR",
+    "PRISMA_CLI_QUERY_ENGINE_TYPE",
+    "CHECKPOINT_DISABLE",
+    "NODE_EXTRA_CA_CERTS",
+    "DATABASE_URL",
+    "ADMIN_PORT",
+    "NEXT_PUBLIC_API_BASE_URL"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

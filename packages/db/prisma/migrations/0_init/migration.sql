@@ -1,5 +1,5 @@
 -- CreateEnum
-CREATE TYPE "ProspectStatus" AS ENUM ('new', 'researching', 'ready', 'sequenced', 'engaged', 'meeting_booked', 'unsubscribed', 'bounced', 'suppressed', 'closed');
+CREATE TYPE "ProspectStatus" AS ENUM ('new', 'researching', 'researched', 'partial', 'insufficient', 'needs_review', 'ready', 'sequenced', 'engaged', 'meeting_booked', 'unsubscribed', 'bounced', 'suppressed', 'closed');
 
 -- CreateEnum
 CREATE TYPE "ResearchStatus" AS ENUM ('researched', 'partial', 'insufficient', 'needs_review');

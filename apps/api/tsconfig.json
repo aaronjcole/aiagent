@@ -5,5 +5,5 @@
     "outDir": "dist"
   },
   "include": ["src/**/*"],
-  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/db" }, { "path": "../../packages/agents" }, { "path": "../../packages/compliance" }, { "path": "../../packages/workflows" }]
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/db" }, { "path": "../../packages/agents" }, { "path": "../../packages/email" }, { "path": "../../packages/compliance" }, { "path": "../../packages/workflows" }]
 }

@@ -14,8 +14,8 @@
     "lint": "turbo run lint",
     "db:generate": "pnpm --filter @app/db exec prisma generate",
     "db:migrate": "pnpm --filter @app/db exec prisma migrate dev",
-    "seed": "pnpm --filter @app/db run seed",
-    "demo": "pnpm --filter @app/api run demo",
+    "seed": "pnpm --filter @app/api run seed",
+    "demo": "pnpm --filter @app/api run demo --",
     "dev": "turbo run dev"
   },
   "devDependencies": {

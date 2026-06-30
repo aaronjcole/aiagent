@@ -17,6 +17,10 @@ datasource db {
 enum ProspectStatus {
   new
   researching
+  researched
+  partial
+  insufficient
+  needs_review
   ready
   sequenced
   engaged

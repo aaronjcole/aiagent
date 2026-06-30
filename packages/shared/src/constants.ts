@@ -12,6 +12,10 @@ type ValueOf<T> = T[keyof T];
 export const ProspectStatus = {
   NEW: 'new',
   RESEARCHING: 'researching',
+  RESEARCHED: 'researched',
+  PARTIAL: 'partial',
+  INSUFFICIENT: 'insufficient',
+  NEEDS_REVIEW: 'needs_review',
   READY: 'ready',
   SEQUENCED: 'sequenced',
   ENGAGED: 'engaged',
