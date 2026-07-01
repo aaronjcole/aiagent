@@ -89,6 +89,7 @@ export interface ReserveCalendarArgs extends ReserveCommon {
   entityId: string;
 }
 
+/** Discriminated union of reservation requests: an email send or a calendar event. */
 export type ReserveArgs = ReserveSendArgs | ReserveCalendarArgs;
 
 /** Injected dependencies for {@link reserveAutoAction}. */

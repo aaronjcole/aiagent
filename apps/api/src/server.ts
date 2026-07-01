@@ -32,6 +32,13 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerAutomationRoutes } from './routes/automation.js';
 import { registerUnsubscribeRoutes } from './routes/unsubscribe.js';
 
+/**
+ * Build the Fastify instance from an injected {@link AppContext}: wires request
+ * logging, auth, rate limiting, the centralized error handler, and all route
+ * modules. Does not listen on a port, so tests and the demo can drive it directly.
+ * @param ctx Shared application context (config, logger, deps).
+ * @returns The configured Fastify instance.
+ */
 export function buildServer(ctx: AppContext): FastifyInstance {
   // Pass the shared pino logger as a `FastifyBaseLogger` so Fastify does not
   // leak the concrete pino `Logger` type into the instance generic (which would

@@ -78,6 +78,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
  */
 export type ReadResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
+/**
+ * Fetch and parse an API endpoint, never throwing: returns `{ ok: true, data }`
+ * on success or `{ ok: false, error }` on failure so server components can render
+ * a friendly message.
+ * @param path API path to read.
+ * @param query Optional query parameters.
+ */
 export async function read<T>(path: string, query?: RequestOptions['query']): Promise<ReadResult<T>> {
   try {
     const data = await request<T>(path, { query });

@@ -87,6 +87,11 @@ interface StoredEvent {
   idempotencyKey: string;
 }
 
+/**
+ * In-memory {@link CalendarProvider} for tests and the demo: computes free/busy
+ * over deterministic seeded blocks plus stored events, and supports idempotent
+ * event creation. Deterministic via an optional configured base date.
+ */
 export class MockCalendarProvider implements CalendarProvider {
   readonly name = 'mock' as const;
 

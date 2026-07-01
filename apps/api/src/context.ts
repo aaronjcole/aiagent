@@ -19,6 +19,10 @@ import { createLogger, loadConfig, type Config, type Logger } from '@app/shared'
 import { createDeps, type Deps } from '@app/workflows';
 import { MockEmailProvider } from '@app/email';
 
+/**
+ * Process-wide dependency bundle for the API: config, logger, prisma client, and
+ * lazy accessors for the Temporal client, shared {@link Deps}, and mock email.
+ */
 export interface AppContext {
   readonly config: Config;
   readonly logger: Logger;

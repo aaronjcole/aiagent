@@ -47,6 +47,7 @@ export interface PreseedMessage {
   snippet?: string;
 }
 
+/** A thread (subject + messages) to preseed into the mock provider for tests/simulation. */
 export interface PreseedThread {
   /** Optional explicit thread id; defaults to a generated id. */
   providerThreadId?: string;
@@ -54,6 +55,7 @@ export interface PreseedThread {
   messages: PreseedMessage[];
 }
 
+/** Options for constructing a {@link MockEmailProvider}. */
 export interface MockEmailProviderOptions {
   logger: Logger;
   /** Deterministic clock; defaults to a fixed epoch. */
@@ -65,6 +67,11 @@ function snippetOf(body: string): string {
   return collapsed.length > 100 ? `${collapsed.slice(0, 100)}…` : collapsed;
 }
 
+/**
+ * In-memory {@link EmailProvider} for tests and the demo: stores threads,
+ * messages, and drafts in maps, supports preseeding inbound threads, and is
+ * deterministic via an injected clock.
+ */
 export class MockEmailProvider implements EmailProvider {
   readonly name = 'mock' as const;
 

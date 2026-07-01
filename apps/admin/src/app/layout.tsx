@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import './globals.css';
 
+/** Next.js document metadata (browser tab title + description) for the admin app. */
 export const metadata: Metadata = {
   title: 'Agentic Email — Admin',
   description: 'Admin dashboard for the agentic email automation system.',

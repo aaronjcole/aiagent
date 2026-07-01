@@ -24,6 +24,10 @@ import type {
 
 const NOT_CONFIGURED = 'google calendar not configured — set GOOGLE_* env and install googleapis';
 
+/**
+ * Google Calendar-backed {@link CalendarProvider} stub. Requires `GOOGLE_*` env
+ * and the `googleapis` dependency; throws `ProviderError` until fully wired up.
+ */
 export class GoogleCalendarProvider implements CalendarProvider {
   readonly name = 'google' as const;
 
