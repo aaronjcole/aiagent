@@ -11,9 +11,12 @@ import { MockCalendarProvider } from '@app/calendar';
 import {
   FakeSettingsReader,
   FakeCapRepo,
+  FakeReservationStore,
   type SettingsReader,
   type CapRepo,
   type FakeCapCounts,
+  type ReserveArgs,
+  type ReserveResult,
 } from '@app/compliance';
 import type { AutonomySettingValue, SETTING_KEYS } from '@app/shared';
 import { asPrisma, type Deps } from '../deps.js';
@@ -208,6 +211,12 @@ export interface MakeDepsOptions {
   settings?: Partial<{ [K in SETTING_KEYS]: AutonomySettingValue<K> }> | SettingsReader;
   /** Preset cap counts for the policy layer (defaults to all-zero). */
   caps?: FakeCapCounts | CapRepo;
+  /**
+   * Atomic reservation function (CORR-2). Defaults to a {@link FakeReservationStore}
+   * bound to the resolved settings, exposed on the returned deps as
+   * `reserveStore` for assertions.
+   */
+  reserve?: (args: ReserveArgs) => Promise<ReserveResult>;
 }
 
 /** True when the argument is already a {@link SettingsReader} (not an overrides map). */
@@ -227,7 +236,10 @@ function isCapRepo(v: unknown): v is CapRepo {
  * readiness not-all-ready), so by default the draft+approval flow stays the
  * default path; tests opt into autonomy by overriding `settings`/`caps`.
  */
-export function makeDeps(prisma: FakePrisma, options: MakeDepsOptions = {}): Deps {
+export function makeDeps(
+  prisma: FakePrisma,
+  options: MakeDepsOptions = {},
+): Deps & { reserveStore: FakeReservationStore } {
   const baseConfig = loadConfig({});
   const config: Config = { ...baseConfig, ...options.config };
   const clockDate = new Date(options.clockIso ?? '2026-06-30T12:00:00.000Z');
@@ -241,6 +253,54 @@ export function makeDeps(prisma: FakePrisma, options: MakeDepsOptions = {}): Dep
     ? options.caps
     : new FakeCapRepo(options.caps ?? {});
 
+  // Default reservation store shares the resolved settings (so cap limits match).
+  // The default wrapper also mirrors PRODUCTION `reserveAutoAction`: on allow it
+  // writes the canonical cap audit row (email.send / email.reply / calendar.create)
+  // carrying SendAuditMetadata + the idempotencyKey column into the FakePrisma
+  // auditLog, so services do NOT (must not) also write it — matching prod, where
+  // a second row would double-count row-counted caps.
+  const reserveStore = new FakeReservationStore(settings);
+  const clockDateForReserve = clockDate;
+  const defaultReserve = async (args: ReserveArgs): Promise<ReserveResult> => {
+    const result = await reserveStore.reserve(args);
+    if (!result.allowed) return result;
+    if (args.kind === 'calendar') {
+      prisma.auditLog.insert({
+        id: newId('audit'),
+        action: 'calendar.create',
+        actorType: 'system',
+        actorId: args.actorId ?? null,
+        entityType: args.entityType,
+        entityId: args.entityId,
+        decision: 'reserve',
+        allowed: true,
+        reason: 'calendar reservation',
+        metadata: { idempotencyKey: args.idempotencyKey },
+        idempotencyKey: args.idempotencyKey,
+        createdAt: clockDateForReserve,
+      });
+    } else {
+      const sender = args.senderEmail.trim().toLowerCase();
+      const domain = args.recipientEmail.split('@')[1]?.trim().toLowerCase() ?? '';
+      prisma.auditLog.insert({
+        id: newId('audit'),
+        action: args.action ?? 'email.send',
+        actorType: 'system',
+        actorId: args.actorId ?? null,
+        entityType: args.entityType,
+        entityId: args.entityId,
+        decision: 'reserve',
+        allowed: true,
+        reason: 'send reservation',
+        metadata: { senderEmail: sender, recipientDomain: domain, idempotencyKey: args.idempotencyKey },
+        idempotencyKey: args.idempotencyKey,
+        createdAt: clockDateForReserve,
+      });
+    }
+    return result;
+  };
+  const reserve = options.reserve ?? defaultReserve;
+
   return {
     config,
     logger: silentLogger,
@@ -248,6 +308,8 @@ export function makeDeps(prisma: FakePrisma, options: MakeDepsOptions = {}): Dep
     prisma: asPrisma(prisma.client),
     settings,
     caps,
+    reserve,
+    reserveStore,
     llmClient: new LlmClient(provider, silentLogger),
     email: new MockEmailProvider({ logger: silentLogger, clock }),
     calendar: new MockCalendarProvider({}, silentLogger),

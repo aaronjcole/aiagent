@@ -24,13 +24,26 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
     body = await req.text();
   }
 
+  // Attach the API bearer token from a SERVER-SIDE env var so the now-protected
+  // upstream API accepts proxied requests. `API_AUTH_TOKEN` is read only in this
+  // server-side route handler and is never exposed to the browser (it is NOT a
+  // `NEXT_PUBLIC_*` var). If unset (local dev), forward without it. The token is
+  // never logged.
+  //
+  // NOTE: this only closes the direct-API auth hole (SEC-1). The admin app's own
+  // access control (network / SSO in front of the admin UI) is out of scope here.
+  const headers: Record<string, string> = {};
+  if (body) headers['content-type'] = 'application/json';
+  const apiToken = process.env.API_AUTH_TOKEN;
+  if (apiToken) headers.authorization = `Bearer ${apiToken}`;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
 
   try {
     const res = await fetch(target, {
       method,
-      headers: body ? { 'content-type': 'application/json' } : undefined,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
       body: body || undefined,
       cache: 'no-store',
       signal: controller.signal,

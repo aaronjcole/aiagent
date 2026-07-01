@@ -139,8 +139,17 @@ function targetSettings(
   });
 }
 
-/** The target env: scheduling ON, send OFF. */
-const TARGET_CONFIG = { enableAutoScheduling: true, enableAutoSend: false } as const;
+/**
+ * The target env: scheduling ON, autonomous EMAIL send OFF (so the confirmation
+ * is DRAFTED, not sent), but the master SENDING_ENABLED switch ON so the
+ * calendar auto-book path is permitted (SENDING_ENABLED now gates calendar
+ * creation as an external action).
+ */
+const TARGET_CONFIG = {
+  enableAutoScheduling: true,
+  enableAutoSend: false,
+  sendingEnabled: true,
+} as const;
 
 /** Build deps wired for the target scenario, with a calendar spy. */
 function makeScenarioDeps(
@@ -221,10 +230,14 @@ describe('calendar auto-book (direct path) — HAPPY PATH', () => {
     expect(eventRow.timezone).toBe('America/New_York');
     expect(isValidIanaTimezone(String(eventRow.timezone))).toBe(true);
 
-    // (3) free/busy availability was checked before booking.
-    expect(spy.availabilityCalls).toHaveLength(1);
-    // and it was checked BEFORE createEvent (spy ordering: availability pushed first).
+    // (3) free/busy availability was checked before booking. Two checks now
+    // occur: the initial slot-finding query, and the SAFE-5 fresh re-check
+    // performed immediately before createEvent (so `slotStillFree` reflects
+    // real, current availability rather than being stamped by construction).
+    expect(spy.availabilityCalls).toHaveLength(2);
+    // and availability was checked BEFORE createEvent (spy ordering).
     expect(spy.availabilityCalls.length).toBeGreaterThan(0);
+    expect(spy.createEventCalls).toHaveLength(1);
 
     // (4) deterministic policy canBookNow returns allow for the same facts.
     //     (Reconstruct the policy input from the booked slot the service used.)
@@ -232,7 +245,10 @@ describe('calendar auto-book (direct path) — HAPPY PATH', () => {
     const policyDeps: CalendarPolicyDeps = {
       settings: deps.settings,
       caps: deps.caps,
-      config: { ENABLE_AUTO_SCHEDULING: deps.config.enableAutoScheduling },
+      config: {
+        ENABLE_AUTO_SCHEDULING: deps.config.enableAutoScheduling,
+        sendingEnabled: deps.config.sendingEnabled,
+      },
       now: deps.clock(),
     };
     const policyInput: AutoCalendarInput = {

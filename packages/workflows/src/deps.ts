@@ -16,8 +16,11 @@ import { createLogger, loadConfig, type Config, type Logger } from '@app/shared'
 import {
   createLiveSettingsReader,
   createCapRepo,
+  reserveAutoAction,
   type SettingsReader,
   type CapRepo,
+  type ReserveArgs,
+  type ReserveResult,
 } from '@app/compliance';
 import { createResearchProvider, type ResearchProvider } from './providers/research.js';
 
@@ -47,6 +50,15 @@ export interface Deps {
   settings: SettingsReader;
   /** Rolling 24h cap counts for the controlled-autonomy policy layer. */
   caps: CapRepo;
+  /**
+   * ATOMIC cap check-and-reserve (CORR-2). Called RIGHT BEFORE an external
+   * send/book provider call: it re-counts the caps and writes the canonical
+   * reservation audit row inside one advisory-locked transaction, so concurrent
+   * runs can never both pass the caps. On `allowed:false` the caller MUST fall
+   * back to approval/propose (never send/create). In production this wraps
+   * {@link reserveAutoAction}; tests inject an in-memory equivalent.
+   */
+  reserve: (args: ReserveArgs) => Promise<ReserveResult>;
 }
 
 /** Options for {@link createDeps}. */
@@ -84,6 +96,7 @@ export async function createDeps(options: CreateDepsOptions = {}): Promise<Deps>
     prisma,
     settings,
     caps,
+    reserve: (args: ReserveArgs) => reserveAutoAction({ prisma, settings, now: clock() }, args),
     llmClient: createLlmClient(config, logger),
     email: createEmailProvider(config, logger, { clock }),
     calendar: createCalendarProvider(config, logger),

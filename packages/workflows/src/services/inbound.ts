@@ -753,7 +753,6 @@ async function tryAutoBook(
   const sensitiveFlags = (args.classification.riskFlags ?? []).map((f) => String(f));
   const attendees = [args.inboundMsg.from.email];
   const threadParticipants = threadParticipantEmails(args.thread);
-  const nowIso = deps.clock().toISOString();
 
   // SPEC calendar idempotency key:
   //   idempotencyKey([email_thread_id, normalized_attendees_joined,
@@ -805,10 +804,43 @@ async function tryAutoBook(
     };
   }
 
+  // SAFE-5: RE-CHECK real availability immediately before booking. Do NOT stamp
+  // `slotStillFree = Boolean(chosen)` / `availabilityCheckedAt = nowIso` by
+  // construction. Re-query the provider for the SAME range and verify the chosen
+  // slot is still free (not overlapped by any busy interval and still present as
+  // a bookable free slot). The REAL check time + REAL free-ness drive the policy.
+  let slotStillFree = false;
+  let availabilityCheckedAt: string | undefined;
+  if (chosen) {
+    const recheckRangeStart = new Date(deps.clock().getTime() + 24 * 60 * 60 * 1000);
+    const recheckRangeEnd = new Date(recheckRangeStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const fresh = await deps.calendar.getAvailability({
+      calendarId,
+      rangeStartIso: recheckRangeStart.toISOString(),
+      rangeEndIso: recheckRangeEnd.toISOString(),
+      durationMinutes: args.durationMinutes,
+      timezone: args.timezone,
+    });
+    availabilityCheckedAt = deps.clock().toISOString();
+    const chosenStart = new Date(chosen.startIso).getTime();
+    const chosenEnd = new Date(chosen.endIso).getTime();
+    // The slot is free iff it overlaps NO busy interval in the fresh result.
+    const overlapsBusy = fresh.busy.some((b) => {
+      const bStart = new Date(b.startIso).getTime();
+      const bEnd = new Date(b.endIso).getTime();
+      return chosenStart < bEnd && bStart < chosenEnd;
+    });
+    slotStillFree = !overlapsBusy;
+  }
+
   const policyDeps: CalendarPolicyDeps = {
     settings: deps.settings,
     caps: deps.caps,
-    config: { ENABLE_AUTO_SCHEDULING: deps.config.enableAutoScheduling },
+    config: {
+      ENABLE_AUTO_SCHEDULING: deps.config.enableAutoScheduling,
+      // SAFE-1: the master send switch must also gate calendar creation.
+      sendingEnabled: deps.config.sendingEnabled,
+    },
     now: deps.clock(),
   };
 
@@ -821,8 +853,8 @@ async function tryAutoBook(
     explicitSlotAgreement,
     timezone: args.timezone,
     timezoneAmbiguous: args.extraction.timezoneAmbiguous,
-    availabilityCheckedAt: nowIso,
-    slotStillFree: Boolean(chosen),
+    availabilityCheckedAt,
+    slotStillFree,
     startIso: chosen?.startIso ?? '',
     endIso: chosen?.endIso ?? '',
     attendees,
@@ -890,6 +922,33 @@ async function tryAutoBook(
   // (The committed-event idempotency short-circuit ran before policy evaluation,
   // above; reaching here means no committed event exists for this key.)
 
+  // --- CORR-2 (calendar): ATOMIC cap check-and-reserve immediately before the
+  // provider create. Re-counts maxCalendarEventsPerDay AND writes the canonical
+  // `calendar.create` reservation row inside one advisory-locked transaction, so
+  // concurrent runs can never both pass the cap. On denial → NO create; fall
+  // back to PROPOSE_TIMES_ONLY. ---
+  const reservation = await deps.reserve({
+    kind: 'calendar',
+    idempotencyKey: eventKey,
+    entityType: 'CalendarEvent',
+    entityId: existing?.id ?? args.threadRowId,
+  });
+  if (!reservation.allowed) {
+    await writeAudit(deps, {
+      action: 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'calendar_event',
+      entityId: existing?.id ?? args.threadRowId,
+      decision: 'denied',
+      allowed: false,
+      reason: reservation.reason ?? 'calendar reservation denied (cap reached)',
+      idempotencyKey: eventKey,
+      metadata: { threadId: args.threadRowId, calendarId, reservation: 'denied' },
+    });
+    // Fall back to PROPOSE_TIMES_ONLY (caller continues to the propose path).
+    return null;
+  }
+
   await writeAudit(deps, {
     action: 'calendar.create.attempted',
     actorType: ActorType.SYSTEM,
@@ -952,18 +1011,11 @@ async function tryAutoBook(
       idempotencyKey: eventKey,
       metadata: { providerEventId: providerEvent.providerEventId, threadId: args.threadRowId },
     });
-    // Canonical action the CapRepo counts calendar creations against.
-    await writeAudit(deps, {
-      action: 'calendar.create',
-      actorType: ActorType.SYSTEM,
-      entityType: 'calendar_event',
-      entityId: row.id,
-      decision: 'created',
-      allowed: true,
-      reason: 'autonomous booking',
-      idempotencyKey: eventKey,
-      metadata: { providerEventId: providerEvent.providerEventId },
-    });
+    // NOTE: the canonical `calendar.create` cap row is written by the atomic
+    // reservation (deps.reserve) BEFORE this create — writing a second one here
+    // would DOUBLE-COUNT the calendar/day cap (countCalendarEventsToday counts
+    // rows, not distinct keys). The reservation row is the single source of
+    // truth the CapRepo counts against.
 
     // --- Confirmation email, gated by the inbound auto-reply policy ---
     // The provider event + CalendarEvent row are now committed; the booking has
@@ -980,6 +1032,11 @@ async function tryAutoBook(
         subject: args.inboundMsg.subject,
         slot,
         timezone: args.timezone,
+        // SAFE-1: pass the REAL classification-derived escalation facts (not a
+        // hardcoded false) so the confirmation reply is denied on a sensitive /
+        // angry / unsubscribe thread.
+        threadHasSensitiveFlag: sensitiveFlags.length > 0 || args.classification.category === 'angry',
+        isUnsubscribe: args.classification.category === 'unsubscribe',
       });
     } catch (confirmErr) {
       await writeAudit(deps, {
@@ -1033,19 +1090,29 @@ async function sendOrDraftConfirmation(
     subject: string;
     slot: TimeSlot;
     timezone: string;
+    /** REAL classification-derived sensitive flag (SAFE-1). */
+    threadHasSensitiveFlag: boolean;
+    /** REAL classification-derived unsubscribe intent (SAFE-1). */
+    isUnsubscribe: boolean;
   },
 ): Promise<void> {
   const body = `You're all set — I've booked us for ${args.slot.startIso} (${args.timezone}). Looking forward to it! If anything changes, just reply here.`;
 
   const replyInput: AutoReplyInput = {
     threadId: args.threadRowId,
-    threadHasSensitiveFlag: false,
-    isUnsubscribe: false,
+    threadHasSensitiveFlag: args.threadHasSensitiveFlag,
+    isUnsubscribe: args.isUnsubscribe,
+    // A confirmation is a REAL send → subject to the same business-hours gate.
+    sendAtIso: deps.clock().toISOString(),
   };
   const policyDeps: EmailPolicyDeps = {
     settings: deps.settings,
     caps: deps.caps,
-    config: { ENABLE_AUTO_SEND: deps.config.enableAutoSend },
+    config: {
+      ENABLE_AUTO_SEND: deps.config.enableAutoSend,
+      // SAFE-1: the master send switch must also gate the confirmation reply.
+      sendingEnabled: deps.config.sendingEnabled,
+    },
     now: deps.clock(),
   };
 
@@ -1097,6 +1164,61 @@ async function sendOrDraftConfirmation(
     return;
   }
 
+  // --- CORR-2 / SAFE-1 / CORR-N2: a booking confirmation is a REAL send, so it
+  // must count toward the send caps. Route it through the SAME atomic
+  // reservation as every other send, emitting the canonical `email.reply` action
+  // (which both the send caps AND the per-thread reply cap count) with the
+  // required SendAuditMetadata + idempotencyKey column. On denial → NO send;
+  // fall back to drafting the confirmation for human review. ---
+  const senderEmailNorm = deps.config.defaultFromEmail.trim().toLowerCase();
+  const recipientDomain = args.toEmail.split('@')[1]?.trim().toLowerCase() ?? '';
+  const reservation = await deps.reserve({
+    kind: 'send',
+    action: 'email.reply',
+    senderEmail: senderEmailNorm,
+    recipientEmail: args.toEmail.trim().toLowerCase(),
+    idempotencyKey: confirmKey,
+    // The per-thread reply cap counts `email.reply` rows keyed on
+    // (entityType='EmailThread', entityId=threadId), so the reservation row must
+    // carry that exact identity to be countable there too.
+    entityType: 'EmailThread',
+    entityId: args.threadRowId,
+  });
+  if (!reservation.allowed) {
+    // Cap reached → draft the confirmation for human review instead of sending.
+    if (args.prospectId) {
+      await deps.prisma.draftEmail.upsert({
+        where: { idempotencyKey: confirmKey },
+        create: {
+          idempotencyKey: confirmKey,
+          prospectId: args.prospectId,
+          threadId: args.threadRowId,
+          fromEmail: deps.config.defaultFromEmail,
+          fromName: deps.config.defaultFromName,
+          toEmail: args.toEmail,
+          subject: `Re: ${args.subject}`,
+          bodyText: body,
+          status: DraftStatus.PENDING_REVIEW,
+          complianceStatus: 'pass',
+        },
+        update: {},
+        select: { id: true },
+      });
+    }
+    await writeAudit(deps, {
+      action: 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'email_thread',
+      entityId: args.threadRowId,
+      decision: 'denied',
+      allowed: false,
+      reason: reservation.reason ?? 'send cap reached',
+      idempotencyKey: confirmKey,
+      metadata: { reasons: [reservation.reason ?? 'send cap reached'], kind: 'booking_confirmation', reservation: 'denied' },
+    });
+    return;
+  }
+
   const headers: Record<string, string> = buildUnsubscribeHeaders({
     settings: deps.settings,
     config: { unsubscribeBaseUrl: deps.config.unsubscribeBaseUrl },
@@ -1132,20 +1254,22 @@ async function sendOrDraftConfirmation(
       allowed: true,
       reason: 'autonomous booking confirmation sent',
       idempotencyKey: confirmKey,
-      metadata: { providerMessageId: sendResult.providerMessageId, kind: 'booking_confirmation' },
+      metadata: {
+        providerMessageId: sendResult.providerMessageId,
+        kind: 'booking_confirmation',
+        // Required SendAuditMetadata so the confirmation is visible to the send
+        // counters (CORR-N2).
+        senderEmail: senderEmailNorm,
+        recipientDomain,
+        idempotencyKey: confirmKey,
+      },
     });
-    // Canonical reply action the CapRepo counts inbound auto-replies against.
-    await writeAudit(deps, {
-      action: 'email.reply',
-      actorType: ActorType.SYSTEM,
-      entityType: 'EmailThread',
-      entityId: args.threadRowId,
-      decision: 'replied',
-      allowed: true,
-      reason: 'autonomous booking confirmation',
-      idempotencyKey: confirmKey,
-      metadata: { kind: 'booking_confirmation' },
-    });
+    // NOTE: the canonical `email.reply` cap row (counted by BOTH the send caps
+    // and the per-thread reply cap) is written by the atomic reservation
+    // (deps.reserve) BEFORE this send. Writing a second `email.reply` row here
+    // would DOUBLE-COUNT the per-thread reply cap (countThreadAutoRepliesToday
+    // counts rows, not distinct keys), so the reservation row is the single
+    // canonical reply record.
   } catch (err) {
     await writeAudit(deps, {
       action: 'email.send.failed',

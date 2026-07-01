@@ -343,12 +343,12 @@ export async function outboundSequenceService(
       toEmail: prospect.email,
       subject: draft.subject,
       bodyText: bodyWithFooter,
-      // Pre-mark APPROVED only when the legacy gate AND the autonomy mode both
-      // clear auto-send; otherwise the conservative PENDING_REVIEW default holds.
-      status:
-        gateResult.canAutoSend && mode === EmailAutonomyMode.LIMITED_AUTO_SEND
-          ? DraftStatus.APPROVED
-          : DraftStatus.PENDING_REVIEW,
+      // SAFE-2: NEVER speculatively pre-mark APPROVED. The draft is persisted
+      // PENDING_REVIEW and only transitions to SENT after a real successful
+      // autonomous send. APPROVED is set exclusively by the human approval path
+      // (send.ts), so a draft the autonomous policy DENIED can never later be
+      // sent through the human path as if it were pre-approved.
+      status: DraftStatus.PENDING_REVIEW,
       complianceStatus: complianceReview.decision,
       complianceFlags: toJson(complianceFlags) as object,
       agentRunId: draftAgentRun.id,
@@ -481,6 +481,28 @@ async function autoSendBranch(
   const researchConfidence =
     typeof research?.confidence === 'number' ? (research.confidence as number) : 0;
 
+  // SAFE-4/CORR-3: populate the REAL per-sequence dedupe facts so the
+  // per-prospect-per-sequence cap + step-dedup gates actually fire (they were
+  // previously inert: prospectSequenceSends hardcoded 0, stepAlreadySent unset).
+  //  - prospectSequenceSends = count of prior SENT sends to this prospect in
+  //    this sequence (from the DB, via countSequenceStepsSent), and
+  //  - stepAlreadySent = whether THIS exact sequence step already went out to
+  //    this prospect. The draft idempotency key encodes the step, so a SENT
+  //    DraftEmail carrying the SAME key is this step already sent. (The draft
+  //    row here is still PENDING_REVIEW; a re-run that already sent would have
+  //    short-circuited earlier on status===SENT, so this is a belt-and-braces
+  //    DB re-check that also catches a committed send from a concurrent run.)
+  const sendCountRepo = createSendCountRepo(deps.prisma);
+  const prospectSequenceSends = await sendCountRepo.countSequenceStepsSent(
+    prospectId,
+    sequenceId,
+  );
+  const sentStepDraft = await deps.prisma.draftEmail.findFirst({
+    where: { idempotencyKey: args.draftKey, status: DraftStatus.SENT },
+    select: { id: true },
+  });
+  const stepAlreadySent = sentStepDraft != null;
+
   const policyInput: AutoSendInput = {
     senderEmail: fromEmail,
     senderActive,
@@ -502,7 +524,8 @@ async function autoSendBranch(
     unsupportedClaims: complianceReview.hasUnsupportedClaims ? ['compliance review flagged unsupported claims'] : [],
     prospectId,
     sequenceId,
-    prospectSequenceSends: 0,
+    stepAlreadySent,
+    prospectSequenceSends,
     sendAtIso: deps.clock().toISOString(),
   };
 
@@ -617,6 +640,46 @@ async function autoSendBranch(
     return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
   }
 
+  // --- CORR-2: ATOMIC cap check-and-reserve, immediately before the send ---
+  // Re-count the caps AND write the canonical reservation audit row inside one
+  // advisory-locked transaction, so two concurrent runs can never both pass the
+  // caps. On denial → NO send; fall back to the human-approval flow.
+  const recipientDomain = args.normalizedRecipient.split('@')[1]?.trim().toLowerCase() ?? '';
+  const reservation = await deps.reserve({
+    kind: 'send',
+    action: 'email.send',
+    senderEmail: fromEmail,
+    recipientEmail: args.normalizedRecipient,
+    idempotencyKey: draftKey,
+    entityType: 'DraftEmail',
+    entityId: draftRow.id,
+  });
+  if (!reservation.allowed) {
+    await writeAudit(deps, {
+      action: 'policy.denied',
+      actorType: ActorType.SYSTEM,
+      entityType: 'draft_email',
+      entityId: draftRow.id,
+      decision: 'denied',
+      allowed: false,
+      reason: reservation.reason ?? 'reservation denied (cap reached)',
+      idempotencyKey: draftKey,
+      metadata: { sequenceId, stepNumber, reservation: 'denied' },
+    });
+    return approvalFallback(deps, {
+      prospectId,
+      sequenceId,
+      stepNumber,
+      draftRow,
+      draft,
+      bodyWithFooter,
+      complianceReview,
+      gateResult: args.gateResult,
+      draftKey,
+      reasons: [reservation.reason ?? 'daily send cap reached'],
+    });
+  }
+
   await writeAudit(deps, {
     action: 'email.send.attempted',
     actorType: ActorType.SYSTEM,
@@ -667,26 +730,16 @@ async function autoSendBranch(
         providerThreadId: sendResult.providerThreadId,
         sequenceId,
         stepNumber,
+        // Required SendAuditMetadata (normalized) on every send audit.
         senderEmail: fromEmail.trim().toLowerCase(),
+        recipientDomain,
+        idempotencyKey: draftKey,
       },
     });
-    // Also record the canonical `email.send` action the CapRepo counts against.
-    await writeAudit(deps, {
-      action: 'email.send',
-      actorType: ActorType.SYSTEM,
-      entityType: 'draft_email',
-      entityId: draftRow.id,
-      decision: 'sent',
-      allowed: true,
-      reason: 'autonomous send',
-      idempotencyKey: draftKey,
-      metadata: {
-        senderEmail: fromEmail.trim().toLowerCase(),
-        recipientDomain: args.normalizedRecipient.split('@')[1] ?? null,
-        sequenceId,
-        stepNumber,
-      },
-    });
+    // NOTE: the canonical `email.send` cap row is written by the atomic
+    // reservation (deps.reserve) BEFORE the send — it is the single source of
+    // truth the send caps count against. Writing a second `email.send` row here
+    // is unnecessary (and would be redundant with the reservation row).
 
     return { status: 'sent', prospectId, sequenceId, draftId: draftRow.id };
   } catch (err) {

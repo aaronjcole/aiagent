@@ -38,12 +38,26 @@ import { isValidIanaTimezone, isWithinBusinessHours } from './business-hours.js'
 export interface EmailPolicyConfig {
   /** Env master flag: autonomous sending is enabled at the deployment level. */
   ENABLE_AUTO_SEND: boolean;
+  /**
+   * MASTER SEND SWITCH (`SENDING_ENABLED`). OPTIONAL for backward compatibility:
+   * when omitted it is treated as OFF (fail-safe), so any path that does NOT yet
+   * pass it in is denied on the switch-gated flows (inbound reply / calendar).
+   * The workflows round MUST pass the real `config.sendingEnabled` here.
+   */
+  sendingEnabled?: boolean;
 }
 
 /** Subset of `Config` the calendar policy services read. */
 export interface CalendarPolicyConfig {
   /** Env master flag: autonomous scheduling is enabled at the deployment level. */
   ENABLE_AUTO_SCHEDULING: boolean;
+  /**
+   * MASTER SEND SWITCH (`SENDING_ENABLED`). OPTIONAL for backward compatibility:
+   * when omitted it is treated as OFF (fail-safe). Calendar creation is an
+   * autonomous EXTERNAL action, so the master send switch must also stop it.
+   * The workflows round MUST pass the real `config.sendingEnabled` here.
+   */
+  sendingEnabled?: boolean;
 }
 
 /** Injected dependencies for the email policy services. */
@@ -357,10 +371,23 @@ export async function canSendNow(
 export interface AutoReplyInput {
   /** Thread the reply would be appended to. */
   threadId: string;
-  /** Thread carries an angry/complaint/legal/security/pricing/procurement flag. */
+  /**
+   * Thread carries an angry/complaint/legal/security/pricing/procurement flag.
+   * The caller MUST pass the REAL classification-derived value (not a hardcoded
+   * false); this gate denies the auto-reply when true.
+   */
   threadHasSensitiveFlag: boolean;
-  /** Inbound message is an unsubscribe/opt-out request. */
+  /**
+   * Inbound message is an unsubscribe/opt-out request. The caller MUST pass the
+   * REAL value; this gate denies the auto-reply when true.
+   */
   isUnsubscribe: boolean;
+  /**
+   * Instant the reply would be sent (ISO-8601); defaults to deps.now. An
+   * auto-reply is a REAL send, so it is subject to the SAME business-hours gate
+   * as an outbound send.
+   */
+  sendAtIso?: string;
 }
 
 /**
@@ -372,6 +399,8 @@ export async function canAutoReplyInboundEmail(
   deps: EmailPolicyDeps,
 ): Promise<PolicyDecision> {
   const { settings, caps, config } = deps;
+  const now = deps.now ?? new Date();
+  const nowIso = input.sendAtIso ?? now.toISOString();
 
   // --- Kill switches (short-circuit) ---
   const killReasons: string[] = [];
@@ -383,6 +412,12 @@ export async function canAutoReplyInboundEmail(
 
   const reasons: string[] = [];
 
+  // --- Master send switch (SENDING_ENABLED) ---
+  // An auto-reply is a REAL send; the master switch must stop it. Optional +
+  // fail-safe: an unset (undefined) value is treated as OFF.
+  if (config.sendingEnabled !== true)
+    reasons.push('SENDING_ENABLED master switch is off');
+
   if (settings.emailAutonomyMode() !== EmailAutonomyMode.LIMITED_AUTO_SEND)
     reasons.push(
       `email autonomy mode is not limited_auto_send (is ${settings.emailAutonomyMode()})`,
@@ -393,6 +428,10 @@ export async function canAutoReplyInboundEmail(
   if (input.threadHasSensitiveFlag)
     reasons.push('thread carries an angry/sensitive (pricing/legal/security/procurement) flag');
   if (input.isUnsubscribe) reasons.push('inbound message is an unsubscribe request');
+
+  // --- Business hours (an auto-reply is a real send) ---
+  if (!isWithinBusinessHours(nowIso, settings.businessHours()))
+    reasons.push('outside configured business hours');
 
   const replies = await caps.countThreadAutoRepliesToday(input.threadId);
   if (replies >= settings.num('maxAutoRepliesPerThreadPerDay'))
@@ -471,6 +510,12 @@ export function canAutoCreateCalendarEvent(
   if (killReasons.length > 0) return denied(...killReasons);
 
   const reasons: string[] = [];
+
+  // --- Master send switch (SENDING_ENABLED) ---
+  // Calendar creation is an autonomous EXTERNAL action; the master send switch
+  // must also stop it. Optional + fail-safe: unset (undefined) is treated OFF.
+  if (config.sendingEnabled !== true)
+    reasons.push('SENDING_ENABLED master switch is off');
 
   // --- Mode + env ---
   if (settings.calendarAutonomyMode() !== CalendarAutonomyMode.AUTO_BOOK_CONFIRMED)

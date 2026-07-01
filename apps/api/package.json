@@ -22,12 +22,13 @@
     "demo": "tsx src/demo.ts"
   },
   "dependencies": {
-    "@app/shared": "workspace:*",
-    "@app/db": "workspace:*",
     "@app/agents": "workspace:*",
-    "@app/email": "workspace:*",
     "@app/compliance": "workspace:*",
+    "@app/db": "workspace:*",
+    "@app/email": "workspace:*",
+    "@app/shared": "workspace:*",
     "@app/workflows": "workspace:*",
+    "@fastify/rate-limit": "^9.1.0",
     "@temporalio/client": "^1.11.1",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",

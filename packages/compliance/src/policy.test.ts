@@ -25,7 +25,7 @@ function emailDeps(over: Partial<EmailPolicyDeps> = {}): EmailPolicyDeps {
   return {
     settings: readySettings({ emailAutonomyMode: EmailAutonomyMode.LIMITED_AUTO_SEND }),
     caps: new FakeCapRepo(),
-    config: { ENABLE_AUTO_SEND: true },
+    config: { ENABLE_AUTO_SEND: true, sendingEnabled: true },
     now: NOW,
     ...over,
   };
@@ -37,7 +37,7 @@ function calDeps(over: Partial<CalendarPolicyDeps> = {}): CalendarPolicyDeps {
       calendarAutonomyMode: CalendarAutonomyMode.AUTO_BOOK_CONFIRMED,
     }),
     caps: new FakeCapRepo(),
-    config: { ENABLE_AUTO_SCHEDULING: true },
+    config: { ENABLE_AUTO_SCHEDULING: true, sendingEnabled: true },
     now: NOW,
     ...over,
   };
@@ -393,11 +393,45 @@ describe('canAutoReplyInboundEmail', () => {
       emailDeps(),
     );
     expect(a.allow).toBe(false);
+    expect(a.reasons.join(' ')).toContain('angry/sensitive');
     const b = await canAutoReplyInboundEmail(
       { threadId: 't1', threadHasSensitiveFlag: false, isUnsubscribe: true },
       emailDeps(),
     );
     expect(b.allow).toBe(false);
+  });
+
+  it('denies when SENDING_ENABLED master switch is off', async () => {
+    const d = await canAutoReplyInboundEmail(
+      { threadId: 't1', threadHasSensitiveFlag: false, isUnsubscribe: false },
+      emailDeps({ config: { ENABLE_AUTO_SEND: true, sendingEnabled: false } }),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('SENDING_ENABLED master switch is off');
+  });
+
+  it('denies when SENDING_ENABLED is omitted (fail-safe OFF)', async () => {
+    const d = await canAutoReplyInboundEmail(
+      { threadId: 't1', threadHasSensitiveFlag: false, isUnsubscribe: false },
+      emailDeps({ config: { ENABLE_AUTO_SEND: true } }),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('SENDING_ENABLED master switch is off');
+  });
+
+  it('denies when outside business hours (an auto-reply is a real send)', async () => {
+    // 02:00Z = 22:00 previous day ET — well outside 9-17 ET business hours.
+    const d = await canAutoReplyInboundEmail(
+      {
+        threadId: 't1',
+        threadHasSensitiveFlag: false,
+        isUnsubscribe: false,
+        sendAtIso: '2025-06-30T02:00:00.000Z',
+      },
+      emailDeps(),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('outside configured business hours');
   });
 
   it('denies on per-thread daily reply cap', async () => {
@@ -440,6 +474,33 @@ describe('canAutoCreateCalendarEvent / canBookNow', () => {
     );
     expect(d.allow).toBe(false);
     expect(d.reasons.join(' ')).toContain('ENABLE_AUTO_SCHEDULING');
+  });
+
+  it('denies when SENDING_ENABLED master switch is off', () => {
+    const d = canAutoCreateCalendarEvent(
+      goodCal(),
+      calDeps({ config: { ENABLE_AUTO_SCHEDULING: true, sendingEnabled: false } }),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('SENDING_ENABLED master switch is off');
+  });
+
+  it('denies when SENDING_ENABLED is omitted (fail-safe OFF)', () => {
+    const d = canAutoCreateCalendarEvent(
+      goodCal(),
+      calDeps({ config: { ENABLE_AUTO_SCHEDULING: true } }),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('SENDING_ENABLED master switch is off');
+  });
+
+  it('canBookNow denies when SENDING_ENABLED master switch is off', async () => {
+    const d = await canBookNow(
+      goodCal(),
+      calDeps({ config: { ENABLE_AUTO_SCHEDULING: true, sendingEnabled: false } }),
+    );
+    expect(d.allow).toBe(false);
+    expect(d.reasons.join(' ')).toContain('SENDING_ENABLED master switch is off');
   });
 
   it('denies when autonomy mode not auto_book_confirmed', () => {

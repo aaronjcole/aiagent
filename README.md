@@ -294,6 +294,34 @@ Seeded idempotently by `pnpm seed`; editable at runtime via
   deterministically adds a `SuppressionEntry` (reason `unsubscribe`) and audits
   `unsubscribe.detected` + `suppression.added`. This backs `List-Unsubscribe-Post`.
 
+### API auth, rate limiting & unified safety enforcement
+
+- **API authentication** — the HTTP API now requires `Authorization: Bearer
+  <API_AUTH_TOKEN>` on all routes except the public ones (`/health` and the
+  recipient-facing `GET|POST /unsubscribe`, which have their own signed token).
+  In **production** (`NODE_ENV=production`) a missing `API_AUTH_TOKEN` **fails
+  closed** — protected routes return `503` — so the API can never run
+  unauthenticated in prod; in dev/demo it is allowed with a loud warning. The
+  admin app forwards this bearer server-side (`API_AUTH_TOKEN`, never exposed to
+  the browser) via its proxy route.
+- **Rate limiting** — enabled globally (`@fastify/rate-limit`, in-memory), with
+  a tighter per-minute cap on the abuse-prone / expensive endpoints (unsubscribe,
+  inbound simulate, research, outbound, draft send) and a request body-size limit.
+- **Unified kill switch + caps across every send/book path** — the master kill
+  switch (`SENDING_ENABLED`) + `globalPauseAllAutomation` / per-outbound
+  kill switches, business-hours, and the daily/sender/domain caps are now
+  enforced identically on **all four** external-action paths: outbound
+  auto-send, human-approved send, inbound booking-confirmation reply, and
+  calendar auto-book. Every send counts toward the caps (confirmation replies
+  included, via a uniform `SendAuditMetadata` shape), and the cap check is an
+  **atomic advisory-locked reservation** — the check and the reserve happen in
+  one Postgres transaction, so two concurrent runs can never both slip past a
+  cap (the old check-then-act race is closed).
+
+> The admin app still needs its **own** network / SSO in front of it — the
+> bearer above only protects the direct API. The **real Gmail / Google Calendar
+> adapters remain unimplemented** (mock-only); nothing real is sent or booked.
+
 ### Local / mock behavior
 
 With the default `mock` providers, **nothing real is sent or booked** — the mock

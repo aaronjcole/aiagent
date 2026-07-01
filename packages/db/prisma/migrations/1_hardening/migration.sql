@@ -1,14 +1,17 @@
 -- Production-hardening forward migration.
 --
--- (a) Create the DeadLetter enum + table (durable record of terminal workflow
---     failures). Generated via `prisma migrate diff`.
--- (b) Idempotently ensure the ProspectStatus enum carries the research-verdict
---     values. Databases created from the ORIGINAL 0_init may predate these
---     values; `ADD VALUE IF NOT EXISTS` upgrades them without failing on
---     databases that already have them (or were created from the current
---     0_init baseline).
+-- Create the DeadLetter enum + table (durable record of terminal workflow
+-- failures). Generated via `prisma migrate diff`.
+--
+-- NOTE: The ProspectStatus enum `ADD VALUE` upgrade that previously lived here
+-- has been split into its own migration (`1a_prospectstatus_values`). Mixing
+-- `ALTER TYPE "ProspectStatus" ADD VALUE` with `CREATE TYPE`/`CREATE TABLE` DDL
+-- inside one Prisma transaction can abort when upgrading a legacy DB (Postgres
+-- forbids using a newly-added enum value in the same transaction that adds it).
+-- Isolating the enum changes avoids that abort. See
+-- `11_prospectstatus_values/migration.sql`.
 
--- (a) DeadLetter -------------------------------------------------------------
+-- DeadLetter -----------------------------------------------------------------
 
 -- CreateEnum
 CREATE TYPE "DeadLetterStatus" AS ENUM ('open', 'resolved');
@@ -30,11 +33,3 @@ CREATE TABLE "DeadLetter" (
 
 -- CreateIndex
 CREATE INDEX "DeadLetter_status_createdAt_idx" ON "DeadLetter"("status", "createdAt");
-
--- (b) ProspectStatus enum upgrade (idempotent) -------------------------------
--- Upgrades databases migrated from an older 0_init that lacked these values.
--- No-op where the value already exists.
-ALTER TYPE "ProspectStatus" ADD VALUE IF NOT EXISTS 'researched';
-ALTER TYPE "ProspectStatus" ADD VALUE IF NOT EXISTS 'partial';
-ALTER TYPE "ProspectStatus" ADD VALUE IF NOT EXISTS 'insufficient';
-ALTER TYPE "ProspectStatus" ADD VALUE IF NOT EXISTS 'needs_review';

@@ -373,7 +373,9 @@ describe('inboundEmailService — CalendarAutonomyMode', () => {
     seedProspect(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: autoBookLlm(),
-      config: { enableAutoScheduling: true, enableAutoSend: true },
+      // SENDING_ENABLED now gates calendar creation (external action), so the
+      // AUTO_BOOK success path requires the master switch ON.
+      config: { enableAutoScheduling: true, enableAutoSend: true, sendingEnabled: true },
       settings: autoBookSettings(),
     });
     const { threadId, messageId } = preseedThread(deps, 'Yes, slot #1 works for me!');
@@ -407,7 +409,8 @@ describe('inboundEmailService — CalendarAutonomyMode', () => {
     seedProspect(prisma);
     const deps = makeDeps(prisma, {
       llmProvider: autoBookLlm(),
-      config: { enableAutoScheduling: true, enableAutoSend: true },
+      // SENDING_ENABLED now gates calendar creation (external action).
+      config: { enableAutoScheduling: true, enableAutoSend: true, sendingEnabled: true },
       settings: autoBookSettings(),
     });
     // Preseed the SAME thread with two inbound messages (same body/from/slot, so

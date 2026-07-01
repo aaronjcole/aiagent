@@ -477,6 +477,9 @@ model AuditLog {
   @@index([createdAt])
   @@index([entityType])
   @@index([entityType, entityId])
+  // Cap counters filter on (action, allowed, createdAt): global/sender/domain
+  // send caps, thread reply caps, and calendar caps all scan AuditLog by these.
+  @@index([action, allowed, createdAt])
 }
 
 model SystemSetting {

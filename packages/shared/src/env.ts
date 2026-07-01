@@ -81,6 +81,12 @@ export const ConfigSchema = z.object({
   // unset, the unsubscribe endpoint falls back to non-signed (email=) links.
   unsubscribeTokenSecret: z.string().optional(),
 
+  // API auth
+  // Shared bearer secret for authenticating API requests. No default: when
+  // unset, the API layer (wired in a later round) treats the deployment as
+  // having NO configured credential. Secret — redacted before logging.
+  apiAuthToken: z.string().optional(),
+
   // Services
   apiPort: intFromString(3001),
   adminPort: intFromString(3000),
@@ -99,6 +105,7 @@ const SECRET_KEYS: readonly (keyof Config)[] = [
   'googleClientSecret',
   'googleRefreshToken',
   'unsubscribeTokenSecret',
+  'apiAuthToken',
 ];
 
 /**
@@ -150,6 +157,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     companyAddress: env.COMPANY_ADDRESS,
     unsubscribeBaseUrl: env.UNSUBSCRIBE_BASE_URL,
     unsubscribeTokenSecret: env.UNSUBSCRIBE_TOKEN_SECRET,
+
+    apiAuthToken: env.API_AUTH_TOKEN,
 
     apiPort: env.API_PORT,
     adminPort: env.ADMIN_PORT,

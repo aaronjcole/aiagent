@@ -98,6 +98,30 @@ export async function sendApprovedDraft(
     );
   }
 
+  // SAFE-1 (human path): the autonomy kill switches must also stop a
+  // human-approved send. The global pause halts ALL automation (including
+  // human-triggered sends); the outbound-sending pause halts outbound sends.
+  // These are checked BEFORE any provider work so a paused system stops cold.
+  const globalPaused = deps.settings.bool('globalPauseAllAutomation');
+  const outboundPaused = deps.settings.bool('pauseOutboundSending');
+  if (globalPaused || outboundPaused) {
+    const reason = globalPaused
+      ? 'kill switch: globalPauseAllAutomation is on'
+      : 'kill switch: pauseOutboundSending is on';
+    await writeAudit(deps, {
+      action: 'automation.paused',
+      actorType: ActorType.HUMAN,
+      entityType: ENTITY,
+      entityId: draftId,
+      decision: 'paused',
+      allowed: false,
+      reason,
+      idempotencyKey: (draftRow.idempotencyKey as string | null) ?? undefined,
+      metadata: { globalPaused, outboundPaused },
+    });
+    return { status: 'blocked', draftId, prospectId: draftRow.prospectId as string, reasons: [reason] };
+  }
+
   const prospectId = draftRow.prospectId as string;
   const prospect = await deps.prisma.prospect.findUnique({
     where: { id: prospectId },
@@ -198,7 +222,44 @@ export async function sendApprovedDraft(
     return { status: 'blocked', draftId, prospectId, reasons };
   }
 
-  // Cleared: safety gates pass + SENDING_ENABLED on + human approval.
+  // --- CORR-N2 / CORR-2: route the human-approved send through the SAME atomic
+  // reservation as the autonomous path. This makes the send visible to the
+  // per-sender / per-domain / global send counters (its canonical `email.send`
+  // audit carries the required SendAuditMetadata + idempotencyKey column), and
+  // makes the check-and-act atomic. We PREFER routing through reserveAutoAction
+  // for cap-accounting consistency across all send paths; on denial (a cap is
+  // reached) the human send is blocked rather than sent over-cap. ---
+  const fromEmailNorm = ((draftRow.fromEmail as string) ?? deps.config.defaultFromEmail)
+    .trim()
+    .toLowerCase();
+  const recipientDomain = (draftRow.toEmail as string).split('@')[1]?.trim().toLowerCase() ?? '';
+  const reservation = await deps.reserve({
+    kind: 'send',
+    action: 'email.send',
+    senderEmail: fromEmailNorm,
+    recipientEmail: (draftRow.toEmail as string).trim().toLowerCase(),
+    idempotencyKey: sendKey,
+    entityType: ENTITY,
+    entityId: draftId,
+    actorId: undefined,
+  });
+  if (!reservation.allowed) {
+    const reason = reservation.reason ?? 'daily send cap reached';
+    await writeAudit(deps, {
+      action: 'email.send_blocked',
+      actorType: ActorType.HUMAN,
+      entityType: ENTITY,
+      entityId: draftId,
+      decision: 'blocked',
+      allowed: false,
+      reason: `send cap reached; not sent: ${reason}`,
+      idempotencyKey: sendKey,
+      metadata: { sequenceId, reservation: 'denied' },
+    });
+    return { status: 'blocked', draftId, prospectId, reasons: [reason] };
+  }
+
+  // Cleared: safety gates pass + SENDING_ENABLED on + human approval + cap slot.
   // Attach RFC 8058 / List-Unsubscribe headers when configured (reusing the
   // SPEC idempotency key the draft already carries — idempotent at the provider).
   const headers: Record<string, string> = buildUnsubscribeHeaders({
@@ -232,8 +293,13 @@ export async function sendApprovedDraft(
     data: { status: ProspectStatus.SEQUENCED },
   });
 
+  // Lifecycle audit for the human-approved send. The canonical `email.send` cap
+  // row (with SendAuditMetadata + idempotencyKey column) is written by the
+  // atomic reservation (deps.reserve) above and is the single source of truth
+  // the send caps count against, so we DON'T re-emit `email.send` here (that
+  // would be redundant with the reservation row).
   await writeAudit(deps, {
-    action: 'email.send',
+    action: 'email.send.succeeded',
     actorType: ActorType.HUMAN,
     entityType: ENTITY,
     entityId: draftId,
@@ -245,6 +311,10 @@ export async function sendApprovedDraft(
       providerMessageId: sendResult.providerMessageId,
       providerThreadId: sendResult.providerThreadId,
       sequenceId,
+      // Mirror SendAuditMetadata on the lifecycle row too (consistency).
+      senderEmail: fromEmailNorm,
+      recipientDomain,
+      idempotencyKey: sendKey,
     },
   });
 

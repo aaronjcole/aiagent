@@ -17,6 +17,8 @@ import {
   isAppError,
 } from '@app/shared';
 import type { AppContext } from './context.js';
+import { registerAuth } from './auth.js';
+import { registerRateLimit } from './rate-limit.js';
 import { registerProspectRoutes } from './routes/prospects.js';
 import { registerResearchRoutes } from './routes/research.js';
 import { registerOutboundRoutes } from './routes/outbound.js';
@@ -35,7 +37,23 @@ export function buildServer(ctx: AppContext): FastifyInstance {
   // leak the concrete pino `Logger` type into the instance generic (which would
   // make the instance incompatible with the plain `FastifyInstance` the route
   // registrars expect).
-  const app: FastifyInstance = Fastify({ logger: ctx.logger as unknown as FastifyBaseLogger });
+  const app: FastifyInstance = Fastify({
+    logger: ctx.logger as unknown as FastifyBaseLogger,
+    // Body size limit (SEC-H2): reject oversized JSON bodies (default is 1 MiB;
+    // set explicitly to 256 KiB — all API payloads are small JSON documents).
+    bodyLimit: 256 * 1024,
+  });
+
+  // --- Rate limiting (SEC-H2) ---
+  // Registered first so its global onRequest hooks wrap all routes. Deferred by
+  // Fastify until ready()/listen().
+  registerRateLimit(app, ctx);
+
+  // --- Bearer authentication (SEC-1) ---
+  // Adds a global onRequest hook enforcing the API bearer token on all routes
+  // except the public ones (/health, GET|POST /unsubscribe). Registered before
+  // the routes so the hook runs ahead of every handler.
+  registerAuth(app, ctx);
 
   // --- Centralized error handler (typed errors → HTTP status) ---
   app.setErrorHandler((err, _req, reply) => {

@@ -6,7 +6,7 @@
  * substitute in-memory fakes and never need Postgres.
  */
 
-import type { PrismaClient } from '@app/db';
+import type { Prisma, PrismaClient } from '@app/db';
 import { DraftStatus, EmailDirection } from '@app/shared';
 import type {
   AddSuppressionInput,
@@ -134,49 +134,112 @@ export function createSendCountRepo(prisma: PrismaClient): SendCountRepo {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Controlled-autonomy cap accounting (AuditLog-backed)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical audit `action` values that COUNT toward the send caps.
+ *
+ * Every real autonomous send — a fresh outbound send AND an inbound
+ * booking-confirmation reply — must count toward the global/sender/domain send
+ * caps. Confirmation replies are logged as `email.reply`, so both actions are
+ * counted here (fixes CORR-N2/SAFE-1: `email.reply` was previously invisible to
+ * the send caps). `email.send` and `email.reply` are treated identically for
+ * send-cap accounting.
+ */
+export const SEND_CAP_ACTIONS = ['email.send', 'email.reply'] as const;
+/** Audit `action` for autonomous inbound replies (per-thread reply cap). */
+export const REPLY_ACTION = 'email.reply';
+/** Audit `action` for autonomous calendar creations. */
+export const CALENDAR_ACTION = 'calendar.create';
+
+/**
+ * REQUIRED metadata shape that EVERY send/reply/confirmation audit row must
+ * carry so the cap counters are consistent across all send paths.
+ *
+ * The workflows round MUST populate all three on every `email.send` /
+ * `email.reply` audit it writes (outbound-auto, human-approved, and
+ * inbound-confirmation), and set the audit row's top-level `idempotencyKey`
+ * column to the same value used here so distinct-key dedup works:
+ *  - `senderEmail`     — normalized (lowercased) sending address; per-sender cap.
+ *  - `recipientDomain` — normalized recipient domain; per-domain cap.
+ *  - `idempotencyKey`  — the send's idempotency key; distinct-key dedup so a
+ *                        Temporal at-least-once retry does not over-count.
+ */
+export interface SendAuditMetadata {
+  /** Normalized (lowercased) sending account address. */
+  senderEmail: string;
+  /** Normalized (lowercased) recipient domain. */
+  recipientDomain: string;
+  /** Idempotency key for this send (also stored in the AuditLog column). */
+  idempotencyKey: string;
+}
+
+/**
+ * Count DISTINCT sends over a `where`, deduping by the audit row's
+ * `idempotencyKey` COLUMN so Temporal at-least-once retries (which can write a
+ * fresh audit row for an already-committed send) do not over-count (CORR-6).
+ *
+ * Rows WITHOUT an `idempotencyKey` are counted individually (conservative — a
+ * missing key cannot be deduped, so it counts as one). Rows WITH a key collapse
+ * to one per distinct key.
+ */
+async function countDistinctSends(
+  prisma: Pick<PrismaClient, 'auditLog'>,
+  where: Prisma.AuditLogWhereInput,
+): Promise<number> {
+  const rows = await prisma.auditLog.findMany({
+    where,
+    select: { idempotencyKey: true },
+  });
+  let nullKeyRows = 0;
+  const distinctKeys = new Set<string>();
+  for (const r of rows) {
+    if (r.idempotencyKey == null || r.idempotencyKey === '') nullKeyRows += 1;
+    else distinctKeys.add(r.idempotencyKey);
+  }
+  return distinctKeys.size + nullKeyRows;
+}
+
 /**
  * Controlled-autonomy cap counts, derived from `AuditLog` action rows over a
  * rolling 24h window. Autonomous actions are recorded as allowed audit rows:
- *  - `email.send`     (action) allowed=true  → counts as an autonomous send,
- *  - `email.reply`    (action) allowed=true  → counts as an autonomous reply,
- *  - `calendar.create`(action) allowed=true  → counts as a calendar creation.
- * The `entityId`/`metadata` carry the sender, recipient domain, and threadId.
+ *  - `email.send` / `email.reply` (allowed=true) → count as an autonomous send,
+ *  - `email.reply`   (allowed=true) → also counts as an autonomous THREAD reply,
+ *  - `calendar.create` (allowed=true) → counts as a calendar creation.
+ * The `metadata` carries {@link SendAuditMetadata} (senderEmail, recipientDomain,
+ * idempotencyKey); the top-level `idempotencyKey` column dedupes retries.
  */
 export function createCapRepo(prisma: PrismaClient): CapRepo {
-  const SEND = 'email.send';
-  const REPLY = 'email.reply';
-  const CAL = 'calendar.create';
-
   return {
     async countGlobalSentToday(): Promise<number> {
-      return prisma.auditLog.count({
-        where: { action: SEND, allowed: true, createdAt: { gte: since24h() } },
+      return countDistinctSends(prisma, {
+        action: { in: [...SEND_CAP_ACTIONS] },
+        allowed: true,
+        createdAt: { gte: since24h() },
       });
     },
     async countSenderSentToday(senderEmail: string): Promise<number> {
-      return prisma.auditLog.count({
-        where: {
-          action: SEND,
-          allowed: true,
-          createdAt: { gte: since24h() },
-          metadata: { path: ['senderEmail'], equals: senderEmail.trim().toLowerCase() },
-        },
+      return countDistinctSends(prisma, {
+        action: { in: [...SEND_CAP_ACTIONS] },
+        allowed: true,
+        createdAt: { gte: since24h() },
+        metadata: { path: ['senderEmail'], equals: senderEmail.trim().toLowerCase() },
       });
     },
     async countDomainSentToday(domain: string): Promise<number> {
-      return prisma.auditLog.count({
-        where: {
-          action: SEND,
-          allowed: true,
-          createdAt: { gte: since24h() },
-          metadata: { path: ['recipientDomain'], equals: domain.trim().toLowerCase() },
-        },
+      return countDistinctSends(prisma, {
+        action: { in: [...SEND_CAP_ACTIONS] },
+        allowed: true,
+        createdAt: { gte: since24h() },
+        metadata: { path: ['recipientDomain'], equals: domain.trim().toLowerCase() },
       });
     },
     async lastSenderSendAt(senderEmail: string): Promise<Date | null> {
       const row = await prisma.auditLog.findFirst({
         where: {
-          action: SEND,
+          action: { in: [...SEND_CAP_ACTIONS] },
           allowed: true,
           metadata: { path: ['senderEmail'], equals: senderEmail.trim().toLowerCase() },
         },
@@ -188,7 +251,7 @@ export function createCapRepo(prisma: PrismaClient): CapRepo {
     async countThreadAutoRepliesToday(threadId: string): Promise<number> {
       return prisma.auditLog.count({
         where: {
-          action: REPLY,
+          action: REPLY_ACTION,
           allowed: true,
           createdAt: { gte: since24h() },
           entityType: 'EmailThread',
@@ -198,7 +261,7 @@ export function createCapRepo(prisma: PrismaClient): CapRepo {
     },
     async countCalendarEventsToday(): Promise<number> {
       return prisma.auditLog.count({
-        where: { action: CAL, allowed: true, createdAt: { gte: since24h() } },
+        where: { action: CALENDAR_ACTION, allowed: true, createdAt: { gte: since24h() } },
       });
     },
   };

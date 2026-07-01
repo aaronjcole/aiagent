@@ -22,7 +22,8 @@ import type {
 } from './types.js';
 import type { SettingsReader } from './settings.js';
 import type { BusinessHours } from './business-hours.js';
-import { extractDomain } from './email.js';
+import type { ReserveArgs, ReserveResult } from './reservations.js';
+import { extractDomain, normalizeEmail } from './email.js';
 
 /** In-memory {@link SuppressionRepo} backed by two maps, for unit tests. */
 export class FakeSuppressionRepo implements SuppressionRepo {
@@ -132,6 +133,87 @@ export class FakeCapRepo implements CapRepo {
   }
   async countCalendarEventsToday(): Promise<number> {
     return this.counts.calendarEvents ?? 0;
+  }
+}
+
+/**
+ * In-memory equivalent of {@link import('./reservations.js').reserveAutoAction}
+ * for unit tests. It applies the SAME atomic check-and-reserve semantics against
+ * an in-memory reservation ledger (deduped by idempotencyKey), so a second call
+ * after a reservation sees the incremented count and denies — exactly the race
+ * the real advisory-locked transaction guards. (The real cross-process
+ * concurrency is enforced by the pg advisory lock and verified in the live-PG
+ * round; this fake exercises the counting + reserve logic.)
+ *
+ * Caps are read from the provided {@link SettingsReader}, matching the real
+ * implementation. Reservations count toward the send caps regardless of whether
+ * the recorded action is `email.send` or `email.reply`.
+ */
+export class FakeReservationStore {
+  /** Reservation rows: {action, senderEmail, recipientDomain, idempotencyKey}. */
+  readonly rows: {
+    kind: 'send' | 'calendar';
+    senderEmail?: string;
+    recipientDomain?: string;
+    idempotencyKey: string;
+  }[] = [];
+
+  constructor(private settings: SettingsReader) {}
+
+  /** Distinct-key count of send reservations matching an optional predicate. */
+  private countSends(pred: (r: FakeReservationStore['rows'][number]) => boolean): number {
+    const keys = new Set<string>();
+    let nullKeys = 0;
+    for (const r of this.rows) {
+      if (r.kind !== 'send' || !pred(r)) continue;
+      if (!r.idempotencyKey) nullKeys += 1;
+      else keys.add(r.idempotencyKey);
+    }
+    return keys.size + nullKeys;
+  }
+
+  /** Atomic (in-memory) check-and-reserve mirroring `reserveAutoAction`. */
+  async reserve(args: ReserveArgs): Promise<ReserveResult> {
+    if (args.kind === 'calendar') {
+      const count = this.rows.filter((r) => r.kind === 'calendar').length;
+      const cap = this.settings.num('maxCalendarEventsPerDay');
+      if (count >= cap) {
+        return { allowed: false, reason: `daily calendar event cap reached (${count}/${cap})` };
+      }
+      this.rows.push({ kind: 'calendar', idempotencyKey: args.idempotencyKey });
+      return { allowed: true };
+    }
+
+    const sender = normalizeEmail(args.senderEmail);
+    const domain = extractDomain(args.recipientEmail) ?? '';
+    const global = this.countSends(() => true);
+    const senderCount = this.countSends((r) => r.senderEmail === sender);
+    const domainCount = domain ? this.countSends((r) => r.recipientDomain === domain) : 0;
+
+    const globalCap = this.settings.num('maxAutoSendsPerDayGlobal');
+    const senderCap = this.settings.num('maxAutoSendsPerSenderPerDay');
+    const domainCap = this.settings.num('maxAutoSendsPerDomainPerDay');
+
+    if (global >= globalCap)
+      return { allowed: false, reason: `global daily auto-send cap reached (${global}/${globalCap})` };
+    if (senderCount >= senderCap)
+      return {
+        allowed: false,
+        reason: `per-sender daily auto-send cap reached (${senderCount}/${senderCap})`,
+      };
+    if (domain && domainCount >= domainCap)
+      return {
+        allowed: false,
+        reason: `per-domain daily auto-send cap reached for ${domain} (${domainCount}/${domainCap})`,
+      };
+
+    this.rows.push({
+      kind: 'send',
+      senderEmail: sender,
+      recipientDomain: domain,
+      idempotencyKey: args.idempotencyKey,
+    });
+    return { allowed: true };
   }
 }
 
