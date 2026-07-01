@@ -230,6 +230,22 @@ export function createCapRepo(prisma: PrismaClient): CapRepo {
       });
     },
     async countDomainSentToday(domain: string): Promise<number> {
+      // INDEX NOTE (per-domain cap — CORR-H3/H4): the per-domain cap counts
+      // `AuditLog` rows by (action IN SEND_CAP_ACTIONS, allowed=true,
+      // createdAt >= now-24h) AND a `metadata.recipientDomain` JSON-path equality.
+      // The existing `@@index([action, allowed, createdAt])` (migration
+      // `1b_auditlog_capindex`) serves the three LEADING predicates, narrowing the
+      // scan to the last-24h allowed send/reply rows before the JSON filter runs.
+      //
+      // The domain itself lives ONLY inside the `metadata` JSON column
+      // (`recipientDomain`), NOT as an independent, indexable scalar column. A
+      // dedicated index on the domain is therefore NOT ADDED here: it would
+      // require either a Postgres GIN index on the `metadata` jsonb (which Prisma
+      // cannot express in schema and needs raw migration SQL) or promoting
+      // `recipientDomain` to a real `AuditLog` column + backfill — the larger
+      // schema refactor the audit tracks as CORR-H3/H4, out of scope for this
+      // additive change. Until that lands, the composite index above bounds the
+      // work; the JSON-path equality is evaluated over the already-narrowed set.
       return countDistinctSends(prisma, {
         action: { in: [...SEND_CAP_ACTIONS] },
         allowed: true,
