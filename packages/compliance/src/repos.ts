@@ -166,6 +166,13 @@ export const CALENDAR_ACTION = 'calendar.create';
  *  - `recipientDomain` — normalized recipient domain; per-domain cap.
  *  - `idempotencyKey`  — the send's idempotency key; distinct-key dedup so a
  *                        Temporal at-least-once retry does not over-count.
+ *
+ * `recipientDomain` is ALSO stamped on the AuditLog row's own (indexed)
+ * `recipientDomain` COLUMN by the canonical write path (`reservations.ts`) —
+ * see the CORR-H3/H4 note on `countDomainSentToday` below. Keeping it in
+ * `metadata` too is intentional: it preserves a human-readable audit trail and
+ * was the pre-migration source of truth (see the `4_auditlog_recipient_domain`
+ * backfill), but the hot per-domain cap query filters the column, not this key.
  */
 export interface SendAuditMetadata {
   /** Normalized (lowercased) sending account address. */
@@ -230,27 +237,26 @@ export function createCapRepo(prisma: PrismaClient): CapRepo {
       });
     },
     async countDomainSentToday(domain: string): Promise<number> {
-      // INDEX NOTE (per-domain cap — CORR-H3/H4): the per-domain cap counts
-      // `AuditLog` rows by (action IN SEND_CAP_ACTIONS, allowed=true,
-      // createdAt >= now-24h) AND a `metadata.recipientDomain` JSON-path equality.
-      // The existing `@@index([action, allowed, createdAt])` (migration
-      // `1b_auditlog_capindex`) serves the three LEADING predicates, narrowing the
-      // scan to the last-24h allowed send/reply rows before the JSON filter runs.
+      // INDEX NOTE (per-domain cap — CORR-H3/H4, RESOLVED): `recipientDomain` is
+      // now a genuine, nullable `AuditLog` column (migration
+      // `4_auditlog_recipient_domain`), populated directly by every send/reply
+      // reservation write (`reservations.ts`), with historical rows backfilled
+      // from their pre-existing `metadata.recipientDomain` JSON in that same
+      // migration. The per-domain cap filters on this column instead of a JSON
+      // path, and `@@index([action, allowed, recipientDomain, createdAt])`
+      // covers this query's exact predicate shape (equality columns first, the
+      // range column last) — a direct index scan, not a JSON-path scan over a
+      // wider row set.
       //
-      // The domain itself lives ONLY inside the `metadata` JSON column
-      // (`recipientDomain`), NOT as an independent, indexable scalar column. A
-      // dedicated index on the domain is therefore NOT ADDED here: it would
-      // require either a Postgres GIN index on the `metadata` jsonb (which Prisma
-      // cannot express in schema and needs raw migration SQL) or promoting
-      // `recipientDomain` to a real `AuditLog` column + backfill — the larger
-      // schema refactor the audit tracks as CORR-H3/H4, out of scope for this
-      // additive change. Until that lands, the composite index above bounds the
-      // work; the JSON-path equality is evaluated over the already-narrowed set.
+      // `metadata.recipientDomain` is still written on every send audit (kept
+      // for audit-trail readability / human inspection of the raw JSON blob and
+      // as a backward-compat source for the one-time backfill), but this hot
+      // query no longer reads it.
       return countDistinctSends(prisma, {
         action: { in: [...SEND_CAP_ACTIONS] },
         allowed: true,
         createdAt: { gte: since24h() },
-        metadata: { path: ['recipientDomain'], equals: domain.trim().toLowerCase() },
+        recipientDomain: domain.trim().toLowerCase(),
       });
     },
     async lastSenderSendAt(senderEmail: string): Promise<Date | null> {

@@ -316,6 +316,10 @@ export async function sendApprovedDraft(
       recipientDomain,
       idempotencyKey: sendKey,
     },
+    // CORR-H3/H4: also stamp the promoted column (not counted here — the
+    // reservation row above is the cap source of truth — but keeps this
+    // lifecycle row directly filterable by domain too).
+    recipientDomain,
   });
 
   return { status: 'sent', draftId, prospectId };

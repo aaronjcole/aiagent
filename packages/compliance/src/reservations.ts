@@ -172,6 +172,8 @@ export async function reserveAutoAction(
           reason: 'calendar reservation',
           metadata: { idempotencyKey: args.idempotencyKey } as Prisma.InputJsonValue,
           idempotencyKey: args.idempotencyKey,
+          // No recipientDomain: calendar reservations aren't sends and are never
+          // filtered by the per-domain send cap.
         },
       });
       return { allowed: true };
@@ -207,11 +209,11 @@ export async function reserveAutoAction(
         ...baseWhere,
         metadata: { path: ['senderEmail'], equals: sender },
       }),
+      // CORR-H3/H4: filter on the indexed `recipientDomain` column (see
+      // `@@index([action, allowed, recipientDomain, createdAt])`) rather than a
+      // `metadata` JSON path — matches `repos.ts#countDomainSentToday`.
       domain
-        ? countDistinctSendsTx(tx, {
-            ...baseWhere,
-            metadata: { path: ['recipientDomain'], equals: domain },
-          })
+        ? countDistinctSendsTx(tx, { ...baseWhere, recipientDomain: domain })
         : Promise.resolve(0),
     ]);
 
@@ -253,6 +255,12 @@ export async function reserveAutoAction(
           idempotencyKey: args.idempotencyKey,
         } as Prisma.InputJsonValue,
         idempotencyKey: args.idempotencyKey,
+        // CORR-H3/H4: also stamp the real column (kept in sync with the
+        // metadata copy above) so the per-domain cap query can filter on it
+        // directly. `metadata.recipientDomain` stays populated too, purely for
+        // audit-trail readability / backward-compat with pre-migration rows —
+        // it is no longer read by the hot cap-counting query.
+        recipientDomain: domain || null,
       },
     });
     return { allowed: true };

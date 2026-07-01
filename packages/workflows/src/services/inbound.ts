@@ -1263,6 +1263,9 @@ async function sendOrDraftConfirmation(
         recipientDomain,
         idempotencyKey: confirmKey,
       },
+      // CORR-H3/H4: also stamp the promoted column on this lifecycle row (the
+      // reservation row above remains the cap-counting source of truth).
+      recipientDomain,
     });
     // NOTE: the canonical `email.reply` cap row (counted by BOTH the send caps
     // and the per-thread reply cap) is written by the atomic reservation

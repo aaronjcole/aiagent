@@ -16,6 +16,9 @@ interface AuditRow {
   metadata: Record<string, unknown> | null;
   entityType: string;
   entityId: string;
+  /** Promoted column (CORR-H3/H4). Nullable — legacy pre-migration rows have
+   * no column value even when `metadata.recipientDomain` is present. */
+  recipientDomain?: string | null;
 }
 
 interface FakeWhere {
@@ -25,6 +28,7 @@ interface FakeWhere {
   entityType?: string;
   entityId?: string;
   metadata?: { path: string[]; equals: unknown };
+  recipientDomain?: string;
 }
 
 function matches(row: AuditRow, where: FakeWhere): boolean {
@@ -41,6 +45,9 @@ function matches(row: AuditRow, where: FakeWhere): boolean {
     const key = where.metadata.path[0];
     const val = key === undefined ? undefined : row.metadata?.[key];
     if (val !== where.metadata.equals) return false;
+  }
+  if (where.recipientDomain !== undefined && row.recipientDomain !== where.recipientDomain) {
+    return false;
   }
   return true;
 }
@@ -75,6 +82,7 @@ function row(over: Partial<AuditRow> = {}): AuditRow {
     metadata: null,
     entityType: 'draft_email',
     entityId: 'd1',
+    recipientDomain: null,
     ...over,
   };
 }
@@ -94,12 +102,75 @@ describe('createCapRepo counting (CORR-N2 / CORR-6)', () => {
     const md = { senderEmail: 'sender@us.example.com', recipientDomain: 'acme.com' };
     const repo = createCapRepo(
       fakePrisma([
-        row({ action: 'email.reply', idempotencyKey: 'x', metadata: md }),
-        row({ action: 'email.send', idempotencyKey: 'y', metadata: md }),
+        row({ action: 'email.reply', idempotencyKey: 'x', metadata: md, recipientDomain: 'acme.com' }),
+        row({ action: 'email.send', idempotencyKey: 'y', metadata: md, recipientDomain: 'acme.com' }),
       ]),
     );
     expect(await repo.countSenderSentToday('sender@us.example.com')).toBe(2);
     expect(await repo.countDomainSentToday('acme.com')).toBe(2);
+  });
+
+  describe('countDomainSentToday (CORR-H3/H4: promoted recipientDomain column)', () => {
+    it('counts a row via the new recipientDomain COLUMN (not the metadata JSON path)', async () => {
+      const repo = createCapRepo(
+        fakePrisma([
+          // metadata deliberately omits recipientDomain to prove the column,
+          // not the JSON path, drives the count.
+          row({ action: 'email.send', idempotencyKey: 'c1', recipientDomain: 'acme.com' }),
+        ]),
+      );
+      expect(await repo.countDomainSentToday('acme.com')).toBe(1);
+    });
+
+    it('does NOT count a legacy row with recipientDomain COLUMN NULL, even if metadata JSON has the domain', async () => {
+      // Simulates a pre-migration-4 row where the backfill has not (yet) run —
+      // the hot query now filters strictly on the column, so an un-backfilled
+      // row is correctly invisible to the cap count. This is exactly why the
+      // migration includes a backfill step (validated separately against a
+      // real Postgres instance) rather than relying on this query to also
+      // consult the JSON as a fallback.
+      const repo = createCapRepo(
+        fakePrisma([
+          row({
+            action: 'email.send',
+            idempotencyKey: 'legacy1',
+            metadata: { senderEmail: 'sender@us.example.com', recipientDomain: 'acme.com' },
+            recipientDomain: null,
+          }),
+        ]),
+      );
+      expect(await repo.countDomainSentToday('acme.com')).toBe(0);
+    });
+
+    it('counts a backfilled legacy row once its recipientDomain column is populated', async () => {
+      // Same row as above, but with the column populated the way the
+      // `4_auditlog_recipient_domain` migration's backfill step sets it
+      // (verified against a real Postgres instance in this task's manual
+      // verification) — now correctly counted.
+      const repo = createCapRepo(
+        fakePrisma([
+          row({
+            action: 'email.send',
+            idempotencyKey: 'legacy1',
+            metadata: { senderEmail: 'sender@us.example.com', recipientDomain: 'acme.com' },
+            recipientDomain: 'acme.com',
+          }),
+        ]),
+      );
+      expect(await repo.countDomainSentToday('acme.com')).toBe(1);
+    });
+
+    it('scopes the count to the requested domain only', async () => {
+      const repo = createCapRepo(
+        fakePrisma([
+          row({ action: 'email.send', idempotencyKey: 'd1', recipientDomain: 'acme.com' }),
+          row({ action: 'email.send', idempotencyKey: 'd2', recipientDomain: 'beta.io' }),
+        ]),
+      );
+      expect(await repo.countDomainSentToday('acme.com')).toBe(1);
+      expect(await repo.countDomainSentToday('beta.io')).toBe(1);
+      expect(await repo.countDomainSentToday('other.com')).toBe(0);
+    });
   });
 
   it('deduplicates by idempotencyKey (retry does not over-count)', async () => {

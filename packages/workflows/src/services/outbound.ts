@@ -735,6 +735,9 @@ async function autoSendBranch(
         recipientDomain,
         idempotencyKey: draftKey,
       },
+      // CORR-H3/H4: also stamp the promoted column on this lifecycle row (the
+      // reservation row above remains the cap-counting source of truth).
+      recipientDomain,
     });
     // NOTE: the canonical `email.send` cap row is written by the atomic
     // reservation (deps.reserve) BEFORE the send — it is the single source of

@@ -81,6 +81,17 @@ export interface WriteAuditInput {
   reason?: string;
   metadata?: Record<string, unknown>;
   idempotencyKey?: string;
+  /**
+   * Normalized (lowercased) recipient domain for send/reply/booking-related
+   * audit rows (CORR-H3/H4). Optional: only send-lifecycle rows set this; it
+   * mirrors (and is redundant with, for cap-counting purposes) the canonical
+   * `recipientDomain` column stamped by the atomic reservation write in
+   * `reservations.ts` — that reservation row, not these lifecycle rows, is what
+   * the per-domain send cap counts. Populating it here too keeps every
+   * send-related AuditLog row queryable/filterable by domain directly, without
+   * relying on the `metadata` JSON blob.
+   */
+  recipientDomain?: string;
 }
 
 /** Write a single `AuditLog` row. Every external action + decision is audited. */
@@ -97,6 +108,7 @@ export async function writeAudit(deps: Deps, input: WriteAuditInput): Promise<vo
       reason: input.reason ?? null,
       metadata: input.metadata === undefined ? undefined : toJson(input.metadata),
       idempotencyKey: input.idempotencyKey ?? null,
+      recipientDomain: input.recipientDomain ?? null,
     },
   });
 }

@@ -471,6 +471,12 @@ model AuditLog {
   reason     String?
   metadata   Json?
   idempotencyKey String?
+  // Normalized (lowercased) recipient domain for send/reply/calendar-book
+  // audit rows, promoted out of `metadata` (CORR-H3/H4) so the per-domain send
+  // cap can filter on a real indexed column instead of a JSON path. Nullable:
+  // historical rows predate this column (see migration `4_auditlog_recipient_
+  // domain`'s backfill) and non-send actions never set it.
+  recipientDomain String?
 
   createdAt DateTime @default(now())
 
@@ -480,6 +486,11 @@ model AuditLog {
   // Cap counters filter on (action, allowed, createdAt): global/sender/domain
   // send caps, thread reply caps, and calendar caps all scan AuditLog by these.
   @@index([action, allowed, createdAt])
+  // Per-domain send cap (CORR-H3/H4): countDomainSentToday filters
+  // (action IN [...], allowed=true, recipientDomain=X, createdAt>=since) — this
+  // composite index matches that predicate order (equality columns before the
+  // range column) so the query is a direct index scan, not a JSON-path scan.
+  @@index([action, allowed, recipientDomain, createdAt])
 }
 
 model SystemSetting {
