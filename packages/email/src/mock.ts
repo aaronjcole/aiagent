@@ -47,6 +47,7 @@ export interface PreseedMessage {
   snippet?: string;
 }
 
+/** A thread (subject + messages) to preseed into the mock provider for tests/simulation. */
 export interface PreseedThread {
   /** Optional explicit thread id; defaults to a generated id. */
   providerThreadId?: string;
@@ -54,6 +55,7 @@ export interface PreseedThread {
   messages: PreseedMessage[];
 }
 
+/** Options for constructing a {@link MockEmailProvider}. */
 export interface MockEmailProviderOptions {
   logger: Logger;
   /** Deterministic clock; defaults to a fixed epoch. */
@@ -65,6 +67,11 @@ function snippetOf(body: string): string {
   return collapsed.length > 100 ? `${collapsed.slice(0, 100)}…` : collapsed;
 }
 
+/**
+ * In-memory {@link EmailProvider} for tests and the demo: stores threads,
+ * messages, and drafts in maps, supports preseeding inbound threads, and is
+ * deterministic via an injected clock.
+ */
 export class MockEmailProvider implements EmailProvider {
   readonly name = 'mock' as const;
 
@@ -123,6 +130,15 @@ export class MockEmailProvider implements EmailProvider {
       created.push(thread);
     }
     return created;
+  }
+
+  /**
+   * Return a recorded message by its provider id, or undefined. Exposed so
+   * tests can assert recorded fields (e.g. `headers`) on a sent message.
+   */
+  getRecordedMessage(providerMessageId: string): EmailMessageDTO | undefined {
+    const m = this.messages.get(providerMessageId);
+    return m ? { ...m } : undefined;
   }
 
   async getThread(threadId: string): Promise<EmailThreadDTO> {
@@ -200,6 +216,7 @@ export class MockEmailProvider implements EmailProvider {
       threadId,
       direction: EmailDirection.OUTBOUND,
       idempotencyKey: input.idempotencyKey,
+      headers: input.headers,
     });
   }
 
@@ -223,6 +240,7 @@ export class MockEmailProvider implements EmailProvider {
       threadId: input.threadId,
       direction: EmailDirection.OUTBOUND,
       idempotencyKey: input.idempotencyKey,
+      headers: input.headers,
     });
   }
 
@@ -235,6 +253,7 @@ export class MockEmailProvider implements EmailProvider {
     threadId?: string;
     direction: EmailDirection;
     idempotencyKey: string;
+    headers?: Record<string, string>;
   }): SendResult {
     const sentAt = this.nowIso();
     const providerMessageId = newId('msg');
@@ -256,6 +275,7 @@ export class MockEmailProvider implements EmailProvider {
       body: args.body,
       snippet: snippetOf(args.body),
       receivedAt: sentAt,
+      ...(args.headers ? { headers: args.headers } : {}),
     };
     thread.messages.push(message);
     this.messages.set(providerMessageId, message);

@@ -7,20 +7,25 @@
  * must pass.
  *
  * Gate order (mirrors SPEC §9, adapted to the deterministic core):
- *   1. prospect + valid email exists
- *   2. not suppressed (email/domain)
- *   3. not unsubscribed
- *   4. no prior negative reply
- *   5. sequence step limit ok
- *   6. daily / inbox / domain caps ok
- *   7. draft passed LLM compliance review (decision === 'pass')
- *   8. footer / unsubscribe present
- *   9. human approval requirement
- *  10. auto-send
+ *   1. master send switch (SENDING_ENABLED) — recorded first; forces no
+ *      auto-send when off, but does NOT block draft/approval creation
+ *   2. prospect + valid email exists
+ *   3. not suppressed (email/domain)
+ *   4. not unsubscribed
+ *   5. no prior negative reply
+ *   6. sequence step limit ok
+ *   7. daily / inbox / domain caps ok
+ *   8. draft passed LLM compliance review (decision === 'pass')
+ *   9. footer / unsubscribe present
+ *  10. human approval requirement
+ *  11. auto-send
  *
- * The first eight are HARD gates: any failure means `allowed = false`. Gates 9
- * and 10 govern *how* an allowed send proceeds (auto vs. human approval) and
- * never themselves set `allowed = false`.
+ * Gates 2-9 are SAFETY gates: any failure means `allowed = false`. The
+ * governance/switch gates `sending_enabled` (gate 1), `human_approval`, and
+ * `auto_send` govern *how* an allowed send proceeds (auto vs. human approval)
+ * and never themselves set `allowed = false`. They drive `canAutoSend` and the
+ * new `canSendWithApproval` (a human-approved send when auto-send is off, still
+ * gated on the master SENDING_ENABLED switch).
  */
 
 import type { ComplianceReview } from '@app/shared';
@@ -39,6 +44,7 @@ import { checkSuppression } from './suppression.js';
 import { checkSendingCaps } from './caps.js';
 import { ensureFooter } from './footer.js';
 
+/** All inputs, injected repos, and config for {@link runOutboundGates}. */
 export interface RunOutboundGatesArgs {
   prospect: ProspectLike | null | undefined;
   /** Recipient email; defaults to `prospect.email` when omitted. */
@@ -62,25 +68,50 @@ export interface RunOutboundGatesArgs {
   capConfig: SendingCapConfig;
   footerConfig: FooterConfig;
 
-  /** From `Config.autoSendEnabled`. */
-  config: { autoSendEnabled: boolean };
+  /**
+   * Subset of `Config` the gates read.
+   * - `sendingEnabled` is the master kill switch (SPEC §9 gate 1): when false,
+   *   no automatic send may occur (drafts/approvals are still created).
+   * - `autoSendEnabled` governs whether auto-send is even permitted.
+   */
+  config: { autoSendEnabled: boolean; sendingEnabled: boolean };
   /** System-level kill switch read from SystemSetting; must be `true` to auto-send. */
   systemAutoSendSetting: boolean;
   /** Whether a human has already approved this specific send. */
   hasHumanApproval?: boolean;
 }
 
+/** Build a passing {@link GateDecision} for `gate`. */
 function pass(gate: string, reason = 'ok'): GateDecision {
   return { gate, passed: true, reason };
 }
+/** Build a failing {@link GateDecision} for `gate` with the given reason. */
 function fail(gate: string, reason: string): GateDecision {
   return { gate, passed: false, reason };
 }
 
+/**
+ * Deterministic outbound safety-gate evaluator: the single chokepoint every
+ * outbound send must pass. Runs the ordered gates (see file header) over the
+ * injected repos/config plus the supplied {@link ComplianceReview}, and reports
+ * the safety verdict plus whether the send may auto-send or needs human approval.
+ */
 export async function runOutboundGates(
   args: RunOutboundGatesArgs,
 ): Promise<OutboundGateResult> {
   const decisions: GateDecision[] = [];
+
+  // --- Gate 1: master send kill switch (SENDING_ENABLED) ---
+  // This is recorded as the first decision per SPEC §9 ordering. It does NOT
+  // block draft/approval creation (it is not a hard gate); instead it forces
+  // `canAutoSend = false` below so no automatic send can ever occur while the
+  // master switch is off.
+  const sendingEnabled = args.config.sendingEnabled === true;
+  decisions.push(
+    sendingEnabled
+      ? pass('sending_enabled')
+      : fail('sending_enabled', 'master send switch (SENDING_ENABLED) is off'),
+  );
 
   const toEmail = (args.toEmail ?? args.prospect?.email ?? undefined) ?? undefined;
   const normalizedTo = toEmail ? normalizeEmail(toEmail) : undefined;
@@ -166,50 +197,72 @@ export async function runOutboundGates(
       : fail('footer_present', 'unable to ensure unsubscribe footer'),
   );
 
-  // Hard gates 1-8 determine `allowed`.
-  const hardGatesPassed = decisions.every((d) => d.passed);
+  // Safety gates determine the real safety verdict (`allowed`). These are ALL
+  // gates EXCEPT the governance/switch gates `sending_enabled`,
+  // `human_approval`, and `auto_send`, which govern *how* a safe send proceeds
+  // (auto vs. human approval) and never themselves set `allowed = false`.
+  const GOVERNANCE_GATES = new Set(['sending_enabled', 'human_approval', 'auto_send']);
+  const safetyGatesPassed = decisions.every(
+    (d) => GOVERNANCE_GATES.has(d.gate) || d.passed,
+  );
 
   // --- Gate 9: human approval requirement ---
   // Auto-send is only permissible when the env flag AND the system setting are
   // both true. Otherwise this send requires human approval. NEVER default to
   // auto-send.
-  const autoSendPermitted = args.config.autoSendEnabled === true && args.systemAutoSendSetting === true;
+  // Auto-send additionally requires the master kill switch to be on.
+  const autoSendPermitted =
+    args.config.autoSendEnabled === true &&
+    args.systemAutoSendSetting === true &&
+    sendingEnabled;
 
-  let requiresApproval: boolean;
-  if (!hardGatesPassed) {
+  const hasHumanApproval = args.hasHumanApproval === true;
+
+  // --- Gate 10: auto-send ---
+  // Cleared for autonomous send: safety gates pass + master switch on + auto-send
+  // permitted.
+  const canAutoSend = safetyGatesPassed && autoSendPermitted && sendingEnabled;
+
+  // Human approval authorizes a send when auto-send is off, but the master
+  // SENDING_ENABLED switch is still required. With sendingEnabled=false this is
+  // always false.
+  const canSendWithApproval =
+    safetyGatesPassed && sendingEnabled === true && hasHumanApproval === true;
+
+  // Safe but not cleared for autonomous send → a human must approve.
+  const requiresApproval = safetyGatesPassed && !canAutoSend;
+
+  // --- Gate 9 decision (human_approval), audited but never blocks `allowed` ---
+  if (!safetyGatesPassed) {
     // Blocked sends don't proceed at all; not an approvable item here.
-    requiresApproval = false;
     decisions.push(fail('human_approval', 'blocked by an earlier gate'));
   } else if (autoSendPermitted) {
-    requiresApproval = false;
     decisions.push(pass('human_approval', 'auto-send permitted; no approval required'));
-  } else if (args.hasHumanApproval === true) {
-    requiresApproval = false;
+  } else if (hasHumanApproval) {
     decisions.push(pass('human_approval', 'human approval present'));
   } else {
-    requiresApproval = true;
     decisions.push(
       fail('human_approval', 'human approval required (auto-send disabled)'),
     );
   }
 
-  // --- Gate 10: auto-send ---
-  const canAutoSend = hardGatesPassed && autoSendPermitted;
+  // --- Gate 10 decision (auto_send), audited ---
   decisions.push(
     canAutoSend
       ? pass('auto_send', 'eligible for automatic send')
       : fail(
           'auto_send',
-          hardGatesPassed
+          safetyGatesPassed
             ? 'auto-send disabled; requires human approval'
             : 'blocked by an earlier gate',
         ),
   );
 
   return {
-    allowed: hardGatesPassed,
+    allowed: safetyGatesPassed,
     decisions,
     requiresApproval,
     canAutoSend,
+    canSendWithApproval,
   };
 }

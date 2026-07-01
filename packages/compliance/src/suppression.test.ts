@@ -1,3 +1,4 @@
+/** Tests for suppression checks and idempotent suppression-list additions. */
 import { describe, it, expect } from 'vitest';
 import { SuppressionReason } from '@app/shared';
 import { checkSuppression, addSuppression } from './suppression.js';

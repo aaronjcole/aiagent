@@ -7,4 +7,7 @@ export * from './errors.js';
 export * from './ids.js';
 export * from './logger.js';
 export * from './env.js';
+export * from './unsubscribe-token.js';
+export * from './autonomy.js';
+export * from './policy.js';
 export * from './schemas/index.js';

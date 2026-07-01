@@ -1,0 +1,32 @@
+# Keep build contexts small and reproducible. The app Dockerfiles install the
+# pnpm workspace from the lockfile, so node_modules / build output are excluded
+# and re-created inside the image.
+
+# Dependencies & build artifacts
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+**/coverage
+
+# VCS & local state
+.git
+.gitignore
+
+# Secrets / local env — never bake into an image. The runtime gets config via
+# compose `env_file` / `environment`, not a copied-in .env.
+.env
+.env.*
+!.env.example
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+
+# Docs & infra that the image doesn't need
+README.md
+docker-compose.yml
+docker/
+**/*.log

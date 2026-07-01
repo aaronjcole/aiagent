@@ -27,6 +27,7 @@ type AttemptOutcome<T> =
   | { ok: true; value: T }
   | { ok: false; kind: 'parse' | 'schema'; errorText: string; repairable: boolean };
 
+/** Parse `raw` as JSON (stripping fences) and validate it against `schema`. */
 function tryParseAndValidate<T>(
   raw: string,
   schema: StructuredRequest<T>['schema'],
@@ -197,14 +198,17 @@ export class LlmClient {
     private readonly logger?: Logger,
   ) {}
 
+  /** Name of the underlying provider. */
   get name(): string {
     return this.provider.name;
   }
 
+  /** Default model id of the underlying provider. */
   get model(): string {
     return this.provider.model;
   }
 
+  /** Run a structured request through the provider with parse/validate/repair. */
   structured<T>(req: StructuredRequest<T>): Promise<LlmResult<T>> {
     return runStructured(this.provider, req, this.logger);
   }

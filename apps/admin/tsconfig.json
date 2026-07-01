@@ -11,6 +11,7 @@
     "moduleResolution": "Bundler",
     "allowJs": true,
     "incremental": true,
+    "isolatedModules": true,
     "plugins": [{ "name": "next" }]
   },
   "include": ["src/**/*", "next-env.d.ts", ".next/types/**/*.ts"],

@@ -60,6 +60,10 @@ export interface GmailProviderConfig {
 const NOT_CONFIGURED =
   'gmail provider not configured — set GMAIL_* env and install googleapis';
 
+/**
+ * Gmail-backed {@link EmailProvider} stub. Requires `GMAIL_*` env and the
+ * `googleapis` dependency; throws `ProviderError` until fully wired up.
+ */
 export class GmailProvider implements EmailProvider {
   readonly name = 'gmail' as const;
 

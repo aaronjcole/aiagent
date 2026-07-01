@@ -1,3 +1,4 @@
+/** Tests for {@link classifyUnsubscribe}: deterministic opt-out detection. */
 import { describe, it, expect } from 'vitest';
 import { classifyUnsubscribe } from './unsubscribe.js';
 
@@ -56,5 +57,33 @@ describe('classifyUnsubscribe', () => {
     expect(classifyUnsubscribe('UNSUBSCRIBE now').matchedPhrase).toBe('unsubscribe');
     expect(classifyUnsubscribe('opt-out').matchedPhrase).toBe('opt out');
     expect(classifyUnsubscribe('STOP').matchedPhrase).toBe('stop');
+  });
+
+  it('detects an opt-out present only in the subject line', () => {
+    const result = classifyUnsubscribe({
+      subject: 'Please UNSUBSCRIBE me',
+      body: 'Thanks for the info, looks great.',
+    });
+    expect(result.isUnsubscribe).toBe(true);
+    expect(result.matchedPhrase).toBe('unsubscribe');
+  });
+
+  it('does NOT flag a benign subject + benign body', () => {
+    const result = classifyUnsubscribe({
+      subject: 'Re: pricing question',
+      body: "I'm very interested, can we set up a call?",
+    });
+    expect(result.isUnsubscribe).toBe(false);
+    expect(result.matchedPhrase).toBeNull();
+  });
+
+  it('treats a plain string as the body (backward-compatible)', () => {
+    expect(classifyUnsubscribe('unsubscribe').isUnsubscribe).toBe(true);
+    expect(classifyUnsubscribe('Thanks for reaching out').isUnsubscribe).toBe(false);
+  });
+
+  it('detects an opt-out in the body when subject is omitted on the object form', () => {
+    const result = classifyUnsubscribe({ body: 'stop emailing me' });
+    expect(result.isUnsubscribe).toBe(true);
   });
 });

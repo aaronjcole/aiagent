@@ -19,11 +19,7 @@
   },
   "dependencies": {
     "@app/shared": "workspace:*",
-    "@app/db": "workspace:*",
     "@app/llm": "workspace:*",
-    "@app/email": "workspace:*",
-    "@app/calendar": "workspace:*",
-    "@app/compliance": "workspace:*",
     "zod": "^3.23.8"
   },
   "devDependencies": {

@@ -44,9 +44,6 @@ importers:
 
   apps/admin:
     dependencies:
-      '@app/db':
-        specifier: workspace:*
-        version: link:../../packages/db
       '@app/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -84,12 +81,18 @@ importers:
       '@app/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@app/email':
+        specifier: workspace:*
+        version: link:../../packages/email
       '@app/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@app/workflows':
         specifier: workspace:*
         version: link:../../packages/workflows
+      '@fastify/rate-limit':
+        specifier: ^9.1.0
+        version: 9.1.0
       '@temporalio/client':
         specifier: ^1.11.1
         version: 1.18.1
@@ -161,18 +164,6 @@ importers:
 
   packages/agents:
     dependencies:
-      '@app/calendar':
-        specifier: workspace:*
-        version: link:../calendar
-      '@app/compliance':
-        specifier: workspace:*
-        version: link:../compliance
-      '@app/db':
-        specifier: workspace:*
-        version: link:../db
-      '@app/email':
-        specifier: workspace:*
-        version: link:../email
       '@app/llm':
         specifier: workspace:*
         version: link:../llm
@@ -327,10 +318,16 @@ importers:
       '@app/email':
         specifier: workspace:*
         version: link:../email
+      '@app/llm':
+        specifier: workspace:*
+        version: link:../llm
       '@app/shared':
         specifier: workspace:*
         version: link:../shared
       '@temporalio/activity':
+        specifier: ^1.11.1
+        version: 1.18.1
+      '@temporalio/common':
         specifier: ^1.11.1
         version: 1.18.1
       '@temporalio/workflow':
@@ -705,6 +702,9 @@ packages:
   '@fastify/merge-json-schemas@0.1.1':
     resolution: {integrity: sha512-fERDVz7topgNjtXsJTTW1JKLy0rhuLRcquYqNR9rF7OcVpCa2OVW49ZPDIhaRRCaUuvVxI+N416xUoF76HNSXA==}
 
+  '@fastify/rate-limit@9.1.0':
+    resolution: {integrity: sha512-h5dZWCkuZXN0PxwqaFQLxeln8/LNwQwH9popywmDCFdKfgpi4b/HoMH1lluy6P+30CG9yzzpSpwTCIPNB9T1JA==}
+
   '@grpc/grpc-js@1.14.4':
     resolution: {integrity: sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ==}
     engines: {node: '>=12.10.0'}
@@ -872,6 +872,10 @@ packages:
     engines: {node: '>=10.0'}
     peerDependencies:
       tslib: '2'
+
+  '@lukeed/ms@2.0.2':
+    resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
+    engines: {node: '>=8'}
 
   '@next/env@14.2.35':
     resolution: {integrity: sha512-DuhvCtj4t9Gwrx80dmz2F4t/zKQ4ktN8WrMwOuVzkJfBilwAwGr6v16M5eI8yCuZ63H9TTuEU09Iu2HqkzFPVQ==}
@@ -1801,6 +1805,9 @@ packages:
 
   fast-uri@3.1.3:
     resolution: {integrity: sha512-i70LwGWUduXqzicKXWshooq+sWL1K3WUU5rKZNG/0i3a1OSoX3HqhH5WbWwTmqWfor4urUakGPiRQcleRZTwOg==}
+
+  fastify-plugin@4.5.1:
+    resolution: {integrity: sha512-stRHYGeuqpEZTL1Ef0Ovr2ltazUT9g844X5z/zEBFLG8RYlpDiOCIG+ATvYEp+/zmc7sN29mcIMp8gvYplYPIQ==}
 
   fastify@4.29.1:
     resolution: {integrity: sha512-m2kMNHIG92tSNWv+Z3UeTR9AWLLuo7KctC7mlFPtMEVrfjIhmQhkQnT9v15qA/BfVq3vvj134Y0jl9SBje3jXQ==}
@@ -2893,6 +2900,12 @@ snapshots:
     dependencies:
       fast-deep-equal: 3.1.3
 
+  '@fastify/rate-limit@9.1.0':
+    dependencies:
+      '@lukeed/ms': 2.0.2
+      fastify-plugin: 4.5.1
+      toad-cache: 3.7.1
+
   '@grpc/grpc-js@1.14.4':
     dependencies:
       '@grpc/proto-loader': 0.8.1
@@ -3068,6 +3081,8 @@ snapshots:
       '@jsonjoy.com/buffers': 17.67.0(tslib@2.8.1)
       '@jsonjoy.com/codegen': 17.67.0(tslib@2.8.1)
       tslib: 2.8.1
+
+  '@lukeed/ms@2.0.2': {}
 
   '@next/env@14.2.35': {}
 
@@ -4001,6 +4016,8 @@ snapshots:
   fast-uri@2.4.0: {}
 
   fast-uri@3.1.3: {}
+
+  fastify-plugin@4.5.1: {}
 
   fastify@4.29.1:
     dependencies:

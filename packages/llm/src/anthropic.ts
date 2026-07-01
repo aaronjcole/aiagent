@@ -24,6 +24,10 @@ export class AnthropicProvider implements LlmProvider {
     this.client = new Anthropic({ apiKey: args.apiKey });
   }
 
+  /**
+   * Issue one Messages API completion and return the raw text plus token usage.
+   * Empty responses, SDK errors, and timeouts surface as {@link ProviderError}.
+   */
   async rawComplete(req: RawCompleteRequest): Promise<RawCompleteResult> {
     const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const userContent =

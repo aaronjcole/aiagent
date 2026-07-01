@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ConfidenceSchema, RiskFlagsSchema } from './common.js';
 
+/** Categories an inbound reply can be classified into. */
 export const InboundCategoryEnum = z.enum([
   'interested_schedule',
   'question',
@@ -15,8 +16,10 @@ export const InboundCategoryEnum = z.enum([
   'referral',
   'other',
 ]);
+/** Inferred type of {@link InboundCategoryEnum}. */
 export type InboundCategoryEnum = z.infer<typeof InboundCategoryEnum>;
 
+/** Validates the inbound-classifier output (category, escalation, confidence, risk flags). */
 export const InboundClassificationSchema = z
   .object({
     category: InboundCategoryEnum,
@@ -26,4 +29,5 @@ export const InboundClassificationSchema = z
     riskFlags: RiskFlagsSchema,
   })
   .strict();
+/** Classification result for a single inbound reply. */
 export type InboundClassification = z.infer<typeof InboundClassificationSchema>;

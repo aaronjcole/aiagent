@@ -1,3 +1,4 @@
+/** Tests for {@link MockLlmProvider}: deterministic, schema-valid mock output. */
 import { describe, expect, it } from 'vitest';
 import {
   ComplianceReviewSchema,

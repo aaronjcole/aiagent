@@ -1,3 +1,4 @@
+/** Tests for {@link ensureFooter}: CAN-SPAM unsubscribe/address enforcement. */
 import { describe, it, expect } from 'vitest';
 import { ensureFooter } from './footer.js';
 import type { FooterConfig } from './types.js';

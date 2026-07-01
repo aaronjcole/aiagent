@@ -1,0 +1,84 @@
+name: CI
+
+# Runs the full quality gate on every push and pull request (OPS-H1): install
+# with a frozen lockfile, generate the Prisma client, apply migrations against a
+# real Postgres 16 (so migration validity is exercised in CI), then typecheck,
+# lint, and test.
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: typecheck • lint • test (Node 22, pnpm 10.33)
+    runs-on: ubuntu-latest
+
+    # Postgres 16 service container. Credentials are CI-local placeholders only —
+    # NOT real secrets. DATABASE_URL below points at this service.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aiagent
+          POSTGRES_PASSWORD: aiagent
+          POSTGRES_DB: aiagent
+        ports:
+          - 5432:5432
+        # Wait until Postgres is accepting connections before the job proceeds.
+        options: >-
+          --health-cmd "pg_isready -U aiagent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # CI-local connection string to the Postgres service container above.
+      # Placeholder credentials only — do NOT put real secrets in this workflow.
+      DATABASE_URL: postgresql://aiagent:aiagent@localhost:5432/aiagent?schema=public
+      # Keep telemetry off in CI.
+      CHECKPOINT_DISABLE: "1"
+      # NOTE: the SPEC.md §4 offline Prisma-engine env vars
+      # (PRISMA_ENGINES_MIRROR / PRISMA_*_BINARY / NODE_EXTRA_CA_CERTS) are a
+      # SANDBOX-ONLY workaround. In CI the standard Prisma engine download over
+      # the network works, so those are intentionally NOT set here.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Apply migrations (prisma migrate deploy)
+        # `migrate deploy` (not the interactive `migrate dev`) is the CI/prod-safe
+        # command: it applies committed migrations and fails on drift, so this
+        # step covers migration validity against a real Postgres 16.
+        run: pnpm --filter @app/db exec prisma migrate deploy
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test

@@ -23,6 +23,7 @@ export interface AuditLogPayload {
   idempotencyKey: string | null;
 }
 
+/** Input for {@link buildAuditLogPayload}; optional fields default to null. */
 export interface BuildAuditLogInput {
   action: string;
   actorType: ActorType;

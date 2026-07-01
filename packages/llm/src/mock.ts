@@ -50,6 +50,7 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(sortKeys(value));
 }
 
+/** Recursively sort object keys so stringification is order-independent. */
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(sortKeys);
@@ -78,6 +79,7 @@ function isoAt(baseEpochMs: number, hours: number): string {
   return new Date(baseEpochMs + hours * 3_600_000).toISOString();
 }
 
+/** Build a canned, schema-valid {@link ResearchOutput} for the mock provider. */
 function buildResearch(hash: number): ResearchOutput {
   return {
     status: 'researched',
@@ -115,6 +117,7 @@ function buildResearch(hash: number): ResearchOutput {
   };
 }
 
+/** Build a canned, schema-valid {@link OutreachDraft} for the mock provider. */
 function buildOutreach(hash: number): OutreachDraft {
   return {
     subject: 'Quick idea for your platform team',
@@ -130,6 +133,7 @@ function buildOutreach(hash: number): OutreachDraft {
   };
 }
 
+/** Build a canned, schema-valid (passing) {@link ComplianceReview}. */
 function buildCompliance(hash: number): ComplianceReview {
   return {
     decision: 'pass',
@@ -140,6 +144,7 @@ function buildCompliance(hash: number): ComplianceReview {
   };
 }
 
+/** Build a canned, schema-valid {@link InboundClassification}. */
 function buildInbound(hash: number): InboundClassification {
   return {
     category: 'interested_schedule',
@@ -150,6 +155,7 @@ function buildInbound(hash: number): InboundClassification {
   };
 }
 
+/** Build a canned, schema-valid {@link SchedulingExtraction} with fixed times. */
 function buildSchedulingExtraction(hash: number): SchedulingExtraction {
   // Fixed base so output is fully deterministic (no Date.now()).
   const base = Date.UTC(2026, 6, 1, 9, 0, 0); // 2026-07-01T09:00:00Z
@@ -169,6 +175,7 @@ function buildSchedulingExtraction(hash: number): SchedulingExtraction {
   };
 }
 
+/** Build a canned, schema-valid {@link SchedulingReplyDraft} with fixed slots. */
 function buildSchedulingReply(hash: number): SchedulingReplyDraft {
   const base = Date.UTC(2026, 6, 1, 9, 0, 0);
   return {
@@ -220,6 +227,7 @@ export class MockLlmProvider implements LlmProvider {
     this.model = model;
   }
 
+  /** Return deterministic canned JSON and synthetic token usage for `req`. */
   rawComplete(req: RawCompleteRequest): Promise<RawCompleteResult> {
     const payload = mockPayloadFor(req.agentType, req.input);
     const text = JSON.stringify(payload);

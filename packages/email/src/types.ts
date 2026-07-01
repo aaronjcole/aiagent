@@ -29,6 +29,8 @@ export interface EmailMessageDTO {
   snippet: string;
   /** ISO-8601 timestamp the message was sent/received. */
   receivedAt: string;
+  /** Extra RFC 5322 headers recorded for this message (e.g. List-Unsubscribe). */
+  headers?: Record<string, string>;
 }
 
 /** A normalized email thread with its messages in chronological order. */
@@ -73,6 +75,8 @@ export type SendMessageInput =
       draftId: string;
       threadId?: string;
       idempotencyKey: string;
+      /** Optional extra RFC 5322 headers (e.g. List-Unsubscribe). */
+      headers?: Record<string, string>;
       to?: undefined;
       from?: undefined;
       subject?: undefined;
@@ -86,6 +90,8 @@ export type SendMessageInput =
       body: string;
       threadId?: string;
       idempotencyKey: string;
+      /** Optional extra RFC 5322 headers (e.g. List-Unsubscribe). */
+      headers?: Record<string, string>;
     };
 
 /** Input to reply within an existing thread. */
@@ -96,6 +102,8 @@ export interface ReplyToThreadInput {
   subject?: string;
   body: string;
   idempotencyKey: string;
+  /** Optional extra RFC 5322 headers (e.g. List-Unsubscribe). */
+  headers?: Record<string, string>;
 }
 
 /** Result of a send/reply: the provider ids of the newly created message. */

@@ -1,3 +1,4 @@
+/** Tests for the structured-output runner: parse, validate, repair, escalate. */
 import { describe, expect, it } from 'vitest';
 import { EscalationError, OutreachDraftSchema, type OutreachDraft } from '@app/shared';
 import { runStructured } from './client.js';

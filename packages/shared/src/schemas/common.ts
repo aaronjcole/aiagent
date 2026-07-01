@@ -16,4 +16,5 @@ export const TimeSlotSchema = z
     endIso: IsoDateTimeSchema,
   })
   .strict();
+/** A start/end ISO datetime pair for a candidate meeting slot. */
 export type TimeSlot = z.infer<typeof TimeSlotSchema>;

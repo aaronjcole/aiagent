@@ -62,6 +62,37 @@ export interface SendCountRepo {
    * is omitted, counts steps for the prospect across sequences.
    */
   countSequenceStepsSent(prospectId: string, sequenceId?: string): Promise<number>;
+  /**
+   * Total ALL-TIME outbound sends to a prospect across every sequence (used to
+   * enforce the per-prospect lifetime send cap). Counts sent outbound drafts
+   * regardless of sequence membership or time window.
+   */
+  countProspectSentTotal(prospectId: string): Promise<number>;
+}
+
+/**
+ * Counts/timestamps for controlled-autonomy caps.
+ *
+ * "Today" is defined as a ROLLING last-24-hours window (consistent with the
+ * existing {@link SendCountRepo}). Counts derive from `AuditLog` action rows:
+ *  - autonomous sends → `email.send` rows with `allowed = true`,
+ *  - autonomous replies → `email.reply` rows with `allowed = true`,
+ *  - calendar creations → `calendar.create` rows with `allowed = true`.
+ * Implementations are injectable; tests use {@link import('./fakes.js').FakeCapRepo}.
+ */
+export interface CapRepo {
+  /** Autonomous sends across ALL senders in the last 24h. */
+  countGlobalSentToday(): Promise<number>;
+  /** Autonomous sends from a specific sender in the last 24h. */
+  countSenderSentToday(senderEmail: string): Promise<number>;
+  /** Autonomous sends to a specific recipient domain in the last 24h. */
+  countDomainSentToday(domain: string): Promise<number>;
+  /** Timestamp of the most recent autonomous send from a sender, or null. */
+  lastSenderSendAt(senderEmail: string): Promise<Date | null>;
+  /** Autonomous replies on a specific thread in the last 24h. */
+  countThreadAutoRepliesToday(threadId: string): Promise<number>;
+  /** Calendar events created in the last 24h. */
+  countCalendarEventsToday(): Promise<number>;
 }
 
 /**
@@ -111,6 +142,8 @@ export interface SendingCapCounts {
   inbox: number;
   domain: number;
   sequenceSteps: number;
+  /** All-time sends to this prospect across all sequences. */
+  prospectTotal: number;
 }
 
 /** Subset of {@link import('@app/shared').Config} the caps check needs. */
@@ -119,6 +152,8 @@ export interface SendingCapConfig {
   perInboxDailyCap: number;
   perDomainDailyCap: number;
   sequenceMaxSteps: number;
+  /** Per-prospect lifetime send cap across all sequences. <= 0 means unlimited. */
+  perProspectMaxSends: number;
 }
 
 /** Subset of config needed to build the CAN-SPAM footer. */
@@ -136,8 +171,20 @@ export interface GateDecision {
 
 /** Result of running the full ordered outbound gate sequence. */
 export interface OutboundGateResult {
+  /**
+   * The real safety verdict: all safety gates passed (every gate EXCEPT the
+   * governance/switch gates `sending_enabled`, `human_approval`, `auto_send`).
+   */
   allowed: boolean;
   decisions: GateDecision[];
+  /** Safe but not cleared for autonomous send → a human must approve. */
   requiresApproval: boolean;
+  /** Cleared for autonomous send (safety + master switch + auto-send all on). */
   canAutoSend: boolean;
+  /**
+   * Cleared to send a HUMAN-APPROVED draft: safety gates pass, the master
+   * SENDING_ENABLED switch is on, and a human has approved this send — even when
+   * autonomous auto-send is off.
+   */
+  canSendWithApproval: boolean;
 }

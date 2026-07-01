@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { extractDomain, normalizeEmail } from './email.js';
 
+/** Inputs identifying the send whose caps are being evaluated. */
 export interface CheckSendingCapsInput {
   fromEmail: string;
   /** Recipient domain. If omitted, derived from `recipientEmail`. */
@@ -28,6 +29,7 @@ export interface CheckSendingCapsInput {
   sequenceMaxSteps?: number;
 }
 
+/** Result of a cap check: whether allowed, all breached-cap reasons, and raw counts. */
 export interface CheckSendingCapsResult {
   allowed: boolean;
   reasons: string[];
@@ -39,7 +41,8 @@ export interface CheckSendingCapsResult {
  *  - DAILY_SEND_CAP   — global sends in the last 24h,
  *  - PER_INBOX_DAILY_CAP — sends from this fromEmail in the last 24h,
  *  - PER_DOMAIN_DAILY_CAP — sends to this recipient domain in the last 24h,
- *  - sequence step limit — steps already sent for this prospect/sequence.
+ *  - sequence step limit — steps already sent for this prospect/sequence,
+ *  - PER_PROSPECT_MAX_SENDS — all-time sends to this prospect across sequences.
  *
  * A cap is breached when the *current* count is already >= the cap, i.e. one
  * more send would exceed (or merely meet) the limit. We treat >= as the breach
@@ -55,14 +58,21 @@ export async function checkSendingCaps(
     input.domain ?? (input.recipientEmail ? extractDomain(input.recipientEmail) : undefined)
   )?.toLowerCase();
 
-  const [global, inbox, domainCount, sequenceSteps] = await Promise.all([
+  const [global, inbox, domainCount, sequenceSteps, prospectTotal] = await Promise.all([
     repo.countGlobalSentLast24h(),
     repo.countByInboxLast24h(fromEmail),
     domain ? repo.countByDomainLast24h(domain) : Promise.resolve(0),
     repo.countSequenceStepsSent(input.prospectId, input.sequenceId),
+    repo.countProspectSentTotal(input.prospectId),
   ]);
 
-  const counts: SendingCapCounts = { global, inbox, domain: domainCount, sequenceSteps };
+  const counts: SendingCapCounts = {
+    global,
+    inbox,
+    domain: domainCount,
+    sequenceSteps,
+    prospectTotal,
+  };
   const reasons: string[] = [];
 
   const stepLimit = input.sequenceMaxSteps ?? config.sequenceMaxSteps;
@@ -85,6 +95,12 @@ export async function checkSendingCaps(
   if (sequenceSteps >= stepLimit) {
     reasons.push(
       `sequence step limit reached (${sequenceSteps}/${stepLimit})`,
+    );
+  }
+  // Per-prospect lifetime cap. A cap of <= 0 means unlimited (skip the check).
+  if (config.perProspectMaxSends > 0 && prospectTotal >= config.perProspectMaxSends) {
+    reasons.push(
+      `prospect_cap: per-prospect lifetime send cap reached (${prospectTotal}/${config.perProspectMaxSends})`,
     );
   }
 

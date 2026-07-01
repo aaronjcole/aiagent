@@ -9,6 +9,7 @@ const globalForPrisma = globalThis as unknown as {
   __aiagentPrisma?: PrismaClient;
 };
 
+/** Shared PrismaClient instance; reused across hot reloads via globalThis. */
 export const prisma: PrismaClient =
   globalForPrisma.__aiagentPrisma ??
   new PrismaClient({

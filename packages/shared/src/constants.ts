@@ -9,9 +9,14 @@
 /** Helper: derive a string-literal union from a `const` object's values. */
 type ValueOf<T> = T[keyof T];
 
+/** Lifecycle states a prospect moves through, from intake to close. */
 export const ProspectStatus = {
   NEW: 'new',
   RESEARCHING: 'researching',
+  RESEARCHED: 'researched',
+  PARTIAL: 'partial',
+  INSUFFICIENT: 'insufficient',
+  NEEDS_REVIEW: 'needs_review',
   READY: 'ready',
   SEQUENCED: 'sequenced',
   ENGAGED: 'engaged',
@@ -21,16 +26,20 @@ export const ProspectStatus = {
   SUPPRESSED: 'suppressed',
   CLOSED: 'closed',
 } as const;
+/** String-literal union of {@link ProspectStatus} values. */
 export type ProspectStatus = ValueOf<typeof ProspectStatus>;
 
+/** Outcome of the research stage for a prospect. */
 export const ResearchStatus = {
   RESEARCHED: 'researched',
   PARTIAL: 'partial',
   INSUFFICIENT: 'insufficient',
   NEEDS_REVIEW: 'needs_review',
 } as const;
+/** String-literal union of {@link ResearchStatus} values. */
 export type ResearchStatus = ValueOf<typeof ResearchStatus>;
 
+/** Lifecycle of an outbound draft email from creation through send/failure. */
 export const DraftStatus = {
   DRAFT: 'draft',
   PENDING_REVIEW: 'pending_review',
@@ -41,16 +50,20 @@ export const DraftStatus = {
   FAILED: 'failed',
   CANCELLED: 'cancelled',
 } as const;
+/** String-literal union of {@link DraftStatus} values. */
 export type DraftStatus = ValueOf<typeof DraftStatus>;
 
+/** Kinds of action that can require human approval. */
 export const ApprovalType = {
   OUTREACH_SEND: 'outreach_send',
   REPLY_SEND: 'reply_send',
   SCHEDULE_MEETING: 'schedule_meeting',
   ESCALATION: 'escalation',
 } as const;
+/** String-literal union of {@link ApprovalType} values. */
 export type ApprovalType = ValueOf<typeof ApprovalType>;
 
+/** Resolution state of an approval request. */
 export const ApprovalStatus = {
   PENDING: 'pending',
   APPROVED: 'approved',
@@ -58,8 +71,10 @@ export const ApprovalStatus = {
   EXPIRED: 'expired',
   AUTO_APPROVED: 'auto_approved',
 } as const;
+/** String-literal union of {@link ApprovalStatus} values. */
 export type ApprovalStatus = ValueOf<typeof ApprovalStatus>;
 
+/** State of a proposed or booked calendar meeting. */
 export const CalendarEventStatus = {
   PROPOSED: 'proposed',
   TENTATIVE: 'tentative',
@@ -67,8 +82,10 @@ export const CalendarEventStatus = {
   CANCELLED: 'cancelled',
   FAILED: 'failed',
 } as const;
+/** String-literal union of {@link CalendarEventStatus} values. */
 export type CalendarEventStatus = ValueOf<typeof CalendarEventStatus>;
 
+/** Why an email/domain was added to the suppression list. */
 export const SuppressionReason = {
   UNSUBSCRIBE: 'unsubscribe',
   BOUNCE: 'bounce',
@@ -77,8 +94,10 @@ export const SuppressionReason = {
   GLOBAL_BLOCK: 'global_block',
   COMPETITOR: 'competitor',
 } as const;
+/** String-literal union of {@link SuppressionReason} values. */
 export type SuppressionReason = ValueOf<typeof SuppressionReason>;
 
+/** The distinct LLM agents in the pipeline. */
 export const AgentType = {
   RESEARCH: 'research',
   OUTREACH: 'outreach',
@@ -87,8 +106,10 @@ export const AgentType = {
   SCHEDULING_EXTRACTOR: 'scheduling_extractor',
   SCHEDULING_REPLY: 'scheduling_reply',
 } as const;
+/** String-literal union of {@link AgentType} values. */
 export type AgentType = ValueOf<typeof AgentType>;
 
+/** Outcome state of a single agent run. */
 export const AgentRunStatus = {
   PENDING: 'pending',
   RUNNING: 'running',
@@ -97,18 +118,73 @@ export const AgentRunStatus = {
   INVALID_OUTPUT: 'invalid_output',
   ESCALATED: 'escalated',
 } as const;
+/** String-literal union of {@link AgentRunStatus} values. */
 export type AgentRunStatus = ValueOf<typeof AgentRunStatus>;
 
+/** Direction of an email message relative to our system. */
 export const EmailDirection = {
   OUTBOUND: 'outbound',
   INBOUND: 'inbound',
 } as const;
+/** String-literal union of {@link EmailDirection} values. */
 export type EmailDirection = ValueOf<typeof EmailDirection>;
 
+/** Who or what performed an audited action. */
 export const ActorType = {
   SYSTEM: 'system',
   AGENT: 'agent',
   HUMAN: 'human',
   PROVIDER: 'provider',
 } as const;
+/** String-literal union of {@link ActorType} values. */
 export type ActorType = ValueOf<typeof ActorType>;
+
+/** Resolution state of a dead-lettered (failed) work item. */
+export const DeadLetterStatus = {
+  OPEN: 'open',
+  RESOLVED: 'resolved',
+} as const;
+/** String-literal union of {@link DeadLetterStatus} values. */
+export type DeadLetterStatus = ValueOf<typeof DeadLetterStatus>;
+
+/**
+ * Controlled-autonomy mode for OUTBOUND/INBOUND email automation.
+ *
+ * Conservative ladder, lowest → highest autonomy:
+ *  - `DISABLED`: no automated email behavior at all.
+ *  - `DRAFT_ONLY`: agents may compose drafts; nothing leaves without a human.
+ *  - `APPROVAL_REQUIRED`: drafts created + queued for explicit human approval.
+ *  - `LIMITED_AUTO_SEND`: bounded autonomous sending, gated by every
+ *    deterministic policy check (caps, readiness, kill switches, etc.).
+ *
+ * The LLM NEVER selects this mode; it is read from `SystemSetting` by the
+ * deterministic policy layer.
+ */
+export const EmailAutonomyMode = {
+  DISABLED: 'disabled',
+  DRAFT_ONLY: 'draft_only',
+  APPROVAL_REQUIRED: 'approval_required',
+  LIMITED_AUTO_SEND: 'limited_auto_send',
+} as const;
+/** String-literal union of {@link EmailAutonomyMode} values. */
+export type EmailAutonomyMode = ValueOf<typeof EmailAutonomyMode>;
+
+/**
+ * Controlled-autonomy mode for CALENDAR automation.
+ *
+ * Conservative ladder, lowest → highest autonomy:
+ *  - `DISABLED`: no automated calendar behavior.
+ *  - `PROPOSE_TIMES_ONLY`: agents may propose slots; a human books.
+ *  - `AUTO_BOOK_CONFIRMED`: bounded autonomous booking of explicitly
+ *    confirmed slots, gated by every deterministic policy check.
+ *
+ * The LLM NEVER selects this mode; it is read from `SystemSetting` by the
+ * deterministic policy layer.
+ */
+export const CalendarAutonomyMode = {
+  DISABLED: 'disabled',
+  PROPOSE_TIMES_ONLY: 'propose_times_only',
+  AUTO_BOOK_CONFIRMED: 'auto_book_confirmed',
+} as const;
+/** String-literal union of {@link CalendarAutonomyMode} values. */
+export type CalendarAutonomyMode = ValueOf<typeof CalendarAutonomyMode>;

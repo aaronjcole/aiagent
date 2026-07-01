@@ -8,6 +8,7 @@ import { GmailProvider } from './gmail.js';
 import { MockEmailProvider } from './mock.js';
 import type { Clock, EmailProvider } from './types.js';
 
+/** Options for {@link createEmailProvider}. */
 export interface CreateEmailProviderOptions {
   /** Deterministic clock for the mock adapter. */
   clock?: Clock;
