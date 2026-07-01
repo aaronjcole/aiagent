@@ -9,17 +9,35 @@
 -- AlterTable: add the column nullable first so existing rows are valid.
 ALTER TABLE "DeadLetter" ADD COLUMN "dedupeKey" TEXT;
 
--- Backfill any existing rows with a deterministic, collision-free key. The
--- intended runtime semantics are `workflowType || ':' || workflowId`, but
--- preexisting rows may share the same (workflowType, workflowId) — and rows with
--- a null workflowId all fall back to a base key — so backfilling that base key
--- verbatim would create duplicates and abort the unique index below. We append
--- the row primary key (`id`, always unique) to EVERY backfilled key so legacy
--- rows can never collide. This only affects rows that already exist at migration
--- time; new rows written by the application still dedupe by workflowType:workflowId.
-UPDATE "DeadLetter"
-SET "dedupeKey" = "workflowType" || ':' || COALESCE("workflowId", "id") || ':' || "id"
-WHERE "dedupeKey" IS NULL;
+-- Backfill existing rows NON-DESTRUCTIVELY. The intended runtime semantics are
+-- the canonical key `workflowType || ':' || workflowId`. To avoid appending the
+-- `:id` suffix to EVERY row (which would needlessly break the canonical key for
+-- rows that are already unique), we rank each row within its
+-- (workflowType, workflowId) group and only disambiguate where necessary:
+--   - a row with a non-null workflowId that is the FIRST of its group (rn = 1)
+--     keeps the canonical `workflowType:workflowId`;
+--   - genuine duplicates within a group (rn > 1) and rows with a NULL workflowId
+--     (which have no canonical key) get the always-unique `id` appended.
+-- This still guarantees a collision-free `dedupeKey` before the unique index,
+-- while preserving the canonical key for the common (unique) case. Only affects
+-- rows present at migration time; new rows dedupe by workflowType:workflowId.
+WITH ranked AS (
+  SELECT
+    "id",
+    ROW_NUMBER() OVER (
+      PARTITION BY "workflowType", "workflowId"
+      ORDER BY "createdAt", "id"
+    ) AS rn
+  FROM "DeadLetter"
+)
+UPDATE "DeadLetter" AS d
+SET "dedupeKey" = CASE
+  WHEN d."workflowId" IS NOT NULL AND r.rn = 1
+    THEN d."workflowType" || ':' || d."workflowId"
+  ELSE d."workflowType" || ':' || COALESCE(d."workflowId", '') || ':' || d."id"
+END
+FROM ranked AS r
+WHERE d."id" = r."id" AND d."dedupeKey" IS NULL;
 
 -- Enforce NOT NULL now that every row has a value.
 ALTER TABLE "DeadLetter" ALTER COLUMN "dedupeKey" SET NOT NULL;

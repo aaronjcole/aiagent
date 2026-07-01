@@ -9,7 +9,7 @@
 -- inside one Prisma transaction can abort when upgrading a legacy DB (Postgres
 -- forbids using a newly-added enum value in the same transaction that adds it).
 -- Isolating the enum changes avoids that abort. See
--- `11_prospectstatus_values/migration.sql`.
+-- `1a_prospectstatus_values/migration.sql`.
 
 -- DeadLetter -----------------------------------------------------------------
 

@@ -9,6 +9,16 @@
  *
  * The plugin is registered BEFORE the routes so its `onRequest`/`preHandler`
  * hooks wrap all subsequently-registered handlers.
+ *
+ * LIMITATION — single-instance only (accepted MVP scope). The store is
+ * IN-MEMORY and therefore PER-PROCESS: each API replica keeps its own counters.
+ * Under a multi-replica deployment behind a load balancer the effective cap
+ * scales with the replica count (N replicas ≈ N× the intended per-IP limit),
+ * because a client's requests are spread across processes that do not share
+ * state. This is appropriate for the single-instance MVP. A production
+ * multi-replica deployment needs a SHARED store (e.g. the Redis store supported
+ * by `@fastify/rate-limit`) so counters are global across replicas — tracked as
+ * a follow-up, deliberately NOT implemented here.
  */
 
 import rateLimit from '@fastify/rate-limit';
@@ -61,6 +71,8 @@ function isTightRoute(req: FastifyRequest): boolean {
 export function registerRateLimit(app: FastifyInstance, _ctx: AppContext): void {
   void app.register(rateLimit, {
     global: true,
+    // NOTE: default in-memory store — per-process, single-instance only. See the
+    // module doc; multi-replica needs a shared (Redis) store as a follow-up.
     // Dynamic per-request max: tight cap for the abuse-prone routes, otherwise
     // the conservative global default.
     max: (req: FastifyRequest) => (isTightRoute(req) ? TIGHT_MAX : GLOBAL_MAX),

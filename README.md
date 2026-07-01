@@ -458,6 +458,12 @@ Provider adapters are chosen by the `*_PROVIDER` env vars and constructed via
   immutable trail of what the system did and why.
 - **Deterministic safety.** Unsubscribe handling, suppression, send caps, and
   the kill switches are deterministic code, never left to the LLM.
+- **Rate limiting (single-instance).** `@fastify/rate-limit` uses an in-memory,
+  per-process store, which is appropriate for the single-instance MVP. Under a
+  multi-replica deployment the effective per-IP cap scales with the replica
+  count; production multi-replica needs a shared store (e.g. the
+  `@fastify/rate-limit` Redis store) so counters are global — tracked as a
+  follow-up, not implemented here.
 
 ---
 

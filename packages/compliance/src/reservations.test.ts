@@ -102,6 +102,23 @@ describe('reserveAutoAction (via FakeReservationStore)', () => {
     expect(fresh.allowed).toBe(true);
   });
 
+  it('send retry at an exactly-reached cap is ALLOWED by its own reservation', async () => {
+    // cap=1: the first send consumes the only slot. A Temporal retry of the
+    // SAME action (same idempotencyKey) must be allowed — its own reservation
+    // already exists — rather than denied at the exactly-reached cap.
+    const store = new FakeReservationStore(readySettings({ maxAutoSendsPerDayGlobal: 1 }));
+    const first = await store.reserve(sendArgs({ idempotencyKey: 'atcap' }));
+    expect(first.allowed).toBe(true);
+    const retry = await store.reserve(sendArgs({ idempotencyKey: 'atcap' }));
+    expect(retry.allowed).toBe(true);
+    // No duplicate reservation was written on the idempotent retry.
+    expect(store.rows).toHaveLength(1);
+    // A DIFFERENT key at the same cap is still correctly denied.
+    const other = await store.reserve(sendArgs({ idempotencyKey: 'other' }));
+    expect(other.allowed).toBe(false);
+    expect(other.reason).toContain('global daily auto-send cap reached');
+  });
+
   it('calendar: allows within cap and denies at cap', async () => {
     const store = new FakeReservationStore(readySettings({ maxCalendarEventsPerDay: 1 }));
     const first = await store.reserve(calArgs({ idempotencyKey: 'c1' }));
@@ -109,5 +126,19 @@ describe('reserveAutoAction (via FakeReservationStore)', () => {
     const second = await store.reserve(calArgs({ idempotencyKey: 'c2' }));
     expect(second.allowed).toBe(false);
     expect(second.reason).toContain('daily calendar event cap reached');
+  });
+
+  it('calendar retry at an exactly-reached cap is ALLOWED by its own reservation', async () => {
+    // cap=1: a retry of the same calendar action (same idempotencyKey) must be
+    // allowed by its own reservation rather than denied at the reached cap.
+    const store = new FakeReservationStore(readySettings({ maxCalendarEventsPerDay: 1 }));
+    const first = await store.reserve(calArgs({ idempotencyKey: 'cap-cal' }));
+    expect(first.allowed).toBe(true);
+    const retry = await store.reserve(calArgs({ idempotencyKey: 'cap-cal' }));
+    expect(retry.allowed).toBe(true);
+    expect(store.rows).toHaveLength(1);
+    const other = await store.reserve(calArgs({ idempotencyKey: 'cap-cal-2' }));
+    expect(other.allowed).toBe(false);
+    expect(other.reason).toContain('daily calendar event cap reached');
   });
 });

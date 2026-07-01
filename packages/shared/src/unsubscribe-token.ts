@@ -16,7 +16,11 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-/** The unsubscribe target carried by a token. At least one field is expected. */
+/**
+ * The unsubscribe target carried by a token. At least one of `email`/`domain`
+ * MUST be present: signing an empty payload throws and verifying one returns
+ * `null`.
+ */
 export interface UnsubscribeTokenPayload {
   /** Target recipient email (opaque to this module; not validated here). */
   email?: string;
@@ -81,7 +85,14 @@ export function signUnsubscribeToken(
   if (typeof secret !== 'string' || secret.length === 0) {
     throw new Error('signUnsubscribeToken: secret must be a non-empty string');
   }
-  const json = JSON.stringify(canonicalPayload(payload, options.issuedAt));
+  const canonical = canonicalPayload(payload, options.issuedAt);
+  // Reject an empty target: a token carrying neither email nor domain has no
+  // unsubscribe subject and is meaningless (an `iat`-only token would verify to
+  // {} and silently unsubscribe nothing). Fail loudly at sign time.
+  if (canonical.email === undefined && canonical.domain === undefined) {
+    throw new Error('signUnsubscribeToken: payload must include an email or domain');
+  }
+  const json = JSON.stringify(canonical);
   const payloadB64 = b64urlEncode(json);
   const sig = sign(payloadB64, secret);
   return `${payloadB64}.${sig}`;
@@ -125,5 +136,8 @@ export function verifyUnsubscribeToken(
   const result: UnsubscribeTokenPayload = {};
   if (typeof obj.email === 'string') result.email = obj.email;
   if (typeof obj.domain === 'string') result.domain = obj.domain;
+  // A payload with neither field carries no unsubscribe subject; treat it as
+  // invalid so callers never act on an empty target.
+  if (result.email === undefined && result.domain === undefined) return null;
   return result;
 }

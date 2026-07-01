@@ -174,7 +174,11 @@ export async function createLiveSettingsReader(
     if (Date.now() - loadedAt < ttlMs) return;
     refreshing = load()
       .catch(() => {
-        // Keep serving the last good snapshot on a transient DB error.
+        // Keep serving the last-good snapshot on a transient DB error, and
+        // stamp loadedAt=now so a failing refresh does NOT re-fire on every
+        // subsequent read (which would turn a DB blip into a query storm). We
+        // retry no more often than the TTL, matching the success cadence.
+        loadedAt = Date.now();
       })
       .finally(() => {
         refreshing = null;

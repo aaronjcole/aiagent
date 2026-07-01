@@ -6,10 +6,14 @@
  *  - at least one mechanism must be available (a mailto address and/or an
  *    https URL derived from `UNSUBSCRIBE_BASE_URL`).
  *
- * When one-click unsubscribe is configured (an https endpoint is present), the
- * `List-Unsubscribe-Post: List-Unsubscribe=One-Click` header (RFC 8058) is also
- * emitted. This complements the in-body CAN-SPAM footer (`ensureFooter`); it
- * does NOT replace it.
+ * One-click unsubscribe (the https mechanism + the
+ * `List-Unsubscribe-Post: List-Unsubscribe=One-Click` header, RFC 8058) is
+ * emitted ONLY when the https endpoint can be made functional and safe: an
+ * https:// base URL, a valid recipient, AND a signing secret so the link
+ * carries a signed `?token=`. Without the secret no https/one-click mechanism
+ * is advertised (only the mailto fallback, if any) — we never emit a plain,
+ * unverifiable `?email=` one-click link. This complements the in-body CAN-SPAM
+ * footer (`ensureFooter`); it does NOT replace it.
  */
 
 import { signUnsubscribeToken } from '@app/shared';
@@ -67,26 +71,23 @@ export function buildUnsubscribeHeaders(
     mechanisms.push(`<mailto:${normalizeEmail(mailto)}>`);
   }
 
-  // https mechanism (one-click capable). RFC 8058 one-click MUST be HTTPS, so
-  // http:// (and any non-https scheme) is rejected here and falls back to the
-  // mailto mechanism only.
+  // https one-click mechanism (RFC 8058). Emitted ONLY when we can build a
+  // FUNCTIONAL, tamper-evident link, which requires ALL of:
+  //  - an https:// base URL (RFC 8058 one-click MUST be HTTPS; http:// and any
+  //    other scheme are rejected and fall back to the mailto mechanism only),
+  //  - a valid recipient address, AND
+  //  - a signing secret so we can mint a signed `?token=`.
+  // Without the secret we deliberately do NOT advertise a plain `?email=` link:
+  // that endpoint has no way to verify the query input, so a one-click POST to
+  // it would be a nonfunctional / unsafe mechanism. In that case only the
+  // mailto fallback (if any) is offered.
   let hasHttps = false;
   const base = config.unsubscribeBaseUrl?.trim();
-  if (base && /^https:\/\//i.test(base)) {
+  const secret = config.unsubscribeTokenSecret?.trim();
+  if (base && /^https:\/\//i.test(base) && secret && isValidEmail(recipient)) {
     const sep = base.includes('?') ? '&' : '?';
-    let url = base;
-    if (isValidEmail(recipient)) {
-      const normalized = normalizeEmail(recipient);
-      const secret = config.unsubscribeTokenSecret?.trim();
-      if (secret) {
-        // Prefer a signed token so the endpoint derives the target from a
-        // tamper-evident token instead of trusting the query string.
-        const token = signUnsubscribeToken({ email: normalized }, secret);
-        url = `${base}${sep}token=${encodeURIComponent(token)}`;
-      } else {
-        url = `${base}${sep}email=${encodeURIComponent(normalized)}`;
-      }
-    }
+    const token = signUnsubscribeToken({ email: normalizeEmail(recipient) }, secret);
+    const url = `${base}${sep}token=${encodeURIComponent(token)}`;
     mechanisms.push(`<${url}>`);
     hasHttps = true;
   }

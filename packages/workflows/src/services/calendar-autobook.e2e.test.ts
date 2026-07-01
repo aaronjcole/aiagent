@@ -422,6 +422,8 @@ describe('calendar auto-book (direct path) — NEGATIVE CASES (no provider event
 
     expect(result.status).toBe('scheduling_proposed');
     expect(spy.createEventCalls).toHaveLength(0);
+    // A PROPOSED CalendarEvent row IS persisted on the propose path; what must
+    // NOT happen is a provider-backed event, so providerEventId stays undefined.
     expect(prisma.calendarEvent.rows[0]!.providerEventId).toBeUndefined();
     const denied = prisma.auditLog.rows.find((a) => a.action === 'policy.denied');
     expect(String(denied!.reason)).toContain('explicit');
@@ -439,6 +441,7 @@ describe('calendar auto-book (direct path) — NEGATIVE CASES (no provider event
 
     expect(result.status).toBe('scheduling_proposed');
     expect(spy.createEventCalls).toHaveLength(0);
+    // Propose path persists a PROPOSED row; no provider event is created.
     expect(prisma.calendarEvent.rows[0]!.providerEventId).toBeUndefined();
     expect(prisma.auditLog.rows.some((a) => a.action === 'policy.denied')).toBe(true);
   });

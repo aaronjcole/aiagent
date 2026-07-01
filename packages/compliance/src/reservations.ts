@@ -43,6 +43,7 @@ import { SEND_CAP_ACTIONS, CALENDAR_ACTION } from './repos.js';
 export const RESERVE_LOCK_KEY = 4736251809n;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+/** The timestamp 24h before `now` — the lower bound of the rolling cap window. */
 function since24h(now: Date): Date {
   return new Date(now.getTime() - MS_PER_DAY);
 }
@@ -137,6 +138,20 @@ export async function reserveAutoAction(
 
     // (2) Re-count caps WITHIN the tx, then (3)/(4) decide + reserve.
     if (args.kind === 'calendar') {
+      // (2a) Idempotency BEFORE the cap: if this exact action was already
+      // reserved (same idempotencyKey + calendar action), a Temporal retry must
+      // succeed rather than be denied by its own reservation at an exactly-
+      // reached cap. Return allowed without writing a duplicate row.
+      const existing = await tx.auditLog.findFirst({
+        where: {
+          action: CALENDAR_ACTION,
+          allowed: true,
+          idempotencyKey: args.idempotencyKey,
+        },
+        select: { id: true },
+      });
+      if (existing) return { allowed: true };
+
       const count = await tx.auditLog.count({
         where: { action: CALENDAR_ACTION, allowed: true, createdAt: { gte: since24h(now) } },
       });
@@ -164,6 +179,21 @@ export async function reserveAutoAction(
     // kind === 'send'
     const sender = normalizeEmail(args.senderEmail);
     const domain = extractDomain(args.recipientEmail) ?? '';
+
+    // (2a) Idempotency BEFORE the cap: if an ALLOWED send/reply reservation with
+    // this exact idempotencyKey already exists, a Temporal retry must succeed
+    // rather than be denied by its own reservation at an exactly-reached cap.
+    // Return allowed without writing a duplicate row.
+    const existingSend = await tx.auditLog.findFirst({
+      where: {
+        action: { in: [...SEND_CAP_ACTIONS] },
+        allowed: true,
+        idempotencyKey: args.idempotencyKey,
+      },
+      select: { id: true },
+    });
+    if (existingSend) return { allowed: true };
+
     const baseWhere: Prisma.AuditLogWhereInput = {
       action: { in: [...SEND_CAP_ACTIONS] },
       allowed: true,

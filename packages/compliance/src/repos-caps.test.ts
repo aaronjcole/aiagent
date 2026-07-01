@@ -133,6 +133,31 @@ describe('createCapRepo counting (CORR-N2 / CORR-6)', () => {
     expect(await repo.countGlobalSentToday()).toBe(2);
   });
 
+  it('countThreadAutoRepliesToday dedups by idempotencyKey', async () => {
+    const repo = createCapRepo(
+      fakePrisma([
+        row({ action: 'email.reply', entityType: 'EmailThread', entityId: 't1', idempotencyKey: 'r' }),
+        // Temporal retry wrote a duplicate reply audit row for the same send.
+        row({ action: 'email.reply', entityType: 'EmailThread', entityId: 't1', idempotencyKey: 'r' }),
+        row({ action: 'email.reply', entityType: 'EmailThread', entityId: 't1', idempotencyKey: 'r2' }),
+      ]),
+    );
+    // Distinct keys {r, r2} = 2 (not 3).
+    expect(await repo.countThreadAutoRepliesToday('t1')).toBe(2);
+  });
+
+  it('countCalendarEventsToday dedups by idempotencyKey', async () => {
+    const repo = createCapRepo(
+      fakePrisma([
+        row({ action: 'calendar.create', idempotencyKey: 'c' }),
+        row({ action: 'calendar.create', idempotencyKey: 'c' }), // retry
+        row({ action: 'calendar.create', idempotencyKey: 'c2' }),
+      ]),
+    );
+    // Distinct keys {c, c2} = 2 (not 3).
+    expect(await repo.countCalendarEventsToday()).toBe(2);
+  });
+
   it('lastSenderSendAt considers both send and reply actions', async () => {
     const older = new Date('2025-06-30T10:00:00.000Z');
     const newer = new Date('2025-06-30T12:00:00.000Z');

@@ -116,21 +116,27 @@ export interface FakeCapCounts {
 export class FakeCapRepo implements CapRepo {
   constructor(private counts: FakeCapCounts = {}) {}
 
+  /** Preset global 24h autonomous-send count. */
   async countGlobalSentToday(): Promise<number> {
     return this.counts.global ?? 0;
   }
+  /** Preset 24h send count for a sender (per-sender cap). */
   async countSenderSentToday(senderEmail: string): Promise<number> {
     return this.counts.sender?.[senderEmail.trim().toLowerCase()] ?? 0;
   }
+  /** Preset 24h send count for a recipient domain (per-domain cap). */
   async countDomainSentToday(domain: string): Promise<number> {
     return this.counts.domain?.[domain.trim().toLowerCase()] ?? 0;
   }
+  /** Preset most-recent send timestamp for a sender (min-interval spacing). */
   async lastSenderSendAt(senderEmail: string): Promise<Date | null> {
     return this.counts.lastSenderSendAt?.[senderEmail.trim().toLowerCase()] ?? null;
   }
+  /** Preset 24h auto-reply count for a thread (per-thread reply cap). */
   async countThreadAutoRepliesToday(threadId: string): Promise<number> {
     return this.counts.threadReplies?.[threadId] ?? 0;
   }
+  /** Preset 24h calendar-creation count (daily calendar cap). */
   async countCalendarEventsToday(): Promise<number> {
     return this.counts.calendarEvents ?? 0;
   }
@@ -175,12 +181,22 @@ export class FakeReservationStore {
   /** Atomic (in-memory) check-and-reserve mirroring `reserveAutoAction`. */
   async reserve(args: ReserveArgs): Promise<ReserveResult> {
     if (args.kind === 'calendar') {
+      // Idempotency before the cap: a retry with an already-reserved key must
+      // succeed, not be denied by its own reservation at an exactly-reached cap.
+      if (this.rows.some((r) => r.kind === 'calendar' && r.idempotencyKey === args.idempotencyKey)) {
+        return { allowed: true };
+      }
       const count = this.rows.filter((r) => r.kind === 'calendar').length;
       const cap = this.settings.num('maxCalendarEventsPerDay');
       if (count >= cap) {
         return { allowed: false, reason: `daily calendar event cap reached (${count}/${cap})` };
       }
       this.rows.push({ kind: 'calendar', idempotencyKey: args.idempotencyKey });
+      return { allowed: true };
+    }
+
+    // Idempotency before the cap for sends: an already-reserved key succeeds.
+    if (this.rows.some((r) => r.kind === 'send' && r.idempotencyKey === args.idempotencyKey)) {
       return { allowed: true };
     }
 
@@ -224,6 +240,7 @@ export class FakeReservationStore {
 export class FakeSettingsReader implements SettingsReader {
   private overrides: Partial<{ [K in SETTING_KEYS]: AutonomySettingValue<K> }>;
 
+  /** Construct with an optional partial overrides map (rest use defaults). */
   constructor(overrides: Partial<{ [K in SETTING_KEYS]: AutonomySettingValue<K> }> = {}) {
     this.overrides = { ...overrides };
   }
@@ -234,28 +251,35 @@ export class FakeSettingsReader implements SettingsReader {
     return this;
   }
 
+  /** Resolve a setting from the overrides, falling back to the catalog default. */
   get<K extends SETTING_KEYS>(key: K): AutonomySettingValue<K> {
     const v = this.overrides[key];
     return (v === undefined ? defaultFor(key) : v) as AutonomySettingValue<K>;
   }
+  /** The configured email autonomy mode. */
   emailAutonomyMode(): EmailAutonomyMode {
     return this.get('emailAutonomyMode');
   }
+  /** The configured calendar autonomy mode. */
   calendarAutonomyMode(): CalendarAutonomyMode {
     return this.get('calendarAutonomyMode');
   }
+  /** A numeric setting (caps / thresholds / hours). */
   num(key: SETTING_KEYS): number {
     const v = this.get(key);
     return typeof v === 'number' ? v : Number(defaultFor(key));
   }
+  /** A boolean setting (kill switches / readiness flags). */
   bool(key: SETTING_KEYS): boolean {
     const v = this.get(key);
     return typeof v === 'boolean' ? v : Boolean(defaultFor(key));
   }
+  /** A string-array setting (pause lists). */
   strArray(key: SETTING_KEYS): string[] {
     const v = this.get(key);
     return Array.isArray(v) ? (v as string[]) : [];
   }
+  /** The business-hours window {start,end,timezone}. */
   businessHours(): BusinessHours {
     return {
       start: this.num('businessHoursStart'),
@@ -263,6 +287,7 @@ export class FakeSettingsReader implements SettingsReader {
       timezone: String(this.get('businessTimezone')),
     };
   }
+  /** True only if EVERY readiness flag is confirmed. */
   readinessAllReady(): boolean {
     return READINESS_KEYS.every((k) => this.bool(k));
   }

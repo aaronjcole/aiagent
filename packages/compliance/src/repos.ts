@@ -177,9 +177,10 @@ export interface SendAuditMetadata {
 }
 
 /**
- * Count DISTINCT sends over a `where`, deduping by the audit row's
+ * Count DISTINCT audit rows over a `where`, deduping by the audit row's
  * `idempotencyKey` COLUMN so Temporal at-least-once retries (which can write a
- * fresh audit row for an already-committed send) do not over-count (CORR-6).
+ * fresh audit row for an already-committed action) do not over-count (CORR-6).
+ * Used for send, per-thread reply, and calendar cap accounting.
  *
  * Rows WITHOUT an `idempotencyKey` are counted individually (conservative — a
  * missing key cannot be deduped, so it counts as one). Rows WITH a key collapse
@@ -249,19 +250,24 @@ export function createCapRepo(prisma: PrismaClient): CapRepo {
       return row?.createdAt ?? null;
     },
     async countThreadAutoRepliesToday(threadId: string): Promise<number> {
-      return prisma.auditLog.count({
-        where: {
-          action: REPLY_ACTION,
-          allowed: true,
-          createdAt: { gte: since24h() },
-          entityType: 'EmailThread',
-          entityId: threadId,
-        },
+      // Dedup by distinct idempotencyKey (like the send counters) so a Temporal
+      // at-least-once retry that re-writes the reply audit row does not
+      // over-count against the per-thread reply cap.
+      return countDistinctSends(prisma, {
+        action: REPLY_ACTION,
+        allowed: true,
+        createdAt: { gte: since24h() },
+        entityType: 'EmailThread',
+        entityId: threadId,
       });
     },
     async countCalendarEventsToday(): Promise<number> {
-      return prisma.auditLog.count({
-        where: { action: CALENDAR_ACTION, allowed: true, createdAt: { gte: since24h() } },
+      // Dedup by distinct idempotencyKey so a retry of the calendar-creation
+      // audit row does not over-count against the daily calendar cap.
+      return countDistinctSends(prisma, {
+        action: CALENDAR_ACTION,
+        allowed: true,
+        createdAt: { gte: since24h() },
       });
     },
   };
