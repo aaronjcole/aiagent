@@ -45,6 +45,17 @@ export interface SettingsReader {
   businessHours(): BusinessHours;
   /** True only if EVERY readiness flag is confirmed. */
   readinessAllReady(): boolean;
+  /**
+   * Force a synchronous-from-the-caller's-view FRESH reload of the backing store
+   * so the NEXT synchronous read reflects the latest committed `SystemSetting`
+   * values, bypassing the TTL cache. OPTIONAL: only the live reader implements
+   * it (snapshot / fake readers are already exact). Safety-critical decision
+   * points (the final kill-switch re-check before a real send/book) MUST
+   * `await settings.refresh?.()` first so a kill-switch flip cannot be served
+   * stale up to the TTL (fixes SAFE-3). Non-safety-critical reads keep serving
+   * from the short-TTL cache, preserving the query-storm protection.
+   */
+  refresh?(): Promise<void>;
 }
 
 /** Narrow store the {@link SettingsReader} resolves keys from. */
@@ -138,12 +149,20 @@ export interface LiveSettingsReaderOptions {
  * autonomy modes, readiness flags — take effect within the TTL window (default
  * 5s) rather than at next deploy. The TTL bounds DB load so a hot path that
  * checks settings many times per second does not trigger a per-call query storm.
+ * The TTL is env-configurable via `LIVE_SETTINGS_TTL_MS` (wired through
+ * `config.liveSettingsTtlMs` in `createDeps`).
  *
  * The reader exposes the SAME synchronous {@link SettingsReader} interface as the
  * snapshot reader, so callers are unchanged. The synchronous getters read from
  * the most recent snapshot; staleness triggers a non-blocking refresh whose
  * result is applied to subsequent reads. The first snapshot is loaded eagerly
  * before this function resolves.
+ *
+ * SAFETY-CRITICAL FRESHNESS (SAFE-3): the returned reader also exposes
+ * {@link SettingsReader.refresh}, a forced synchronous-awaited reload used at the
+ * actual send/book decision points (kill-switch / autonomy-mode re-check) so a
+ * flip cannot be served stale up to the TTL. The TTL cache still governs the
+ * many non-safety-critical reads, preserving the query-storm protection.
  *
  * Intended for long-lived workers / API processes (wired in `createDeps()`).
  * Tests continue to use {@link FakeSettingsReader}, which is TTL-free and
@@ -185,13 +204,41 @@ export async function createLiveSettingsReader(
       });
   }
 
+  /**
+   * FORCE a fresh reload and wait for it. Used by the safety-critical
+   * forced-fresh path (kill-switch re-check) so a flip cannot be served stale up
+   * to the TTL. Coalesces with any in-flight background refresh so a burst of
+   * decision points does not fan out into many concurrent queries. On a DB error
+   * the last-good snapshot is retained (fail-safe) and the error is swallowed —
+   * the caller's downstream gates remain conservative by construction.
+   */
+  async function refresh(): Promise<void> {
+    if (refreshing) {
+      // A background/stale refresh is already in flight — await it rather than
+      // firing a second concurrent query.
+      await refreshing;
+      return;
+    }
+    refreshing = load()
+      .catch(() => {
+        loadedAt = Date.now();
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+    await refreshing;
+  }
+
   // Eager initial load so the first reads see real values, not catalog defaults.
   await load();
 
-  return makeSettingsReader({
+  const reader = makeSettingsReader({
     raw: (key) => {
       maybeRefresh();
       return snapshot.get(key);
     },
   });
+  // Attach the forced-fresh path used at safety-critical decision points.
+  reader.refresh = refresh;
+  return reader;
 }

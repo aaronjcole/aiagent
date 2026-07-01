@@ -86,7 +86,10 @@ export async function createDeps(options: CreateDepsOptions = {}): Promise<Deps>
   // Build a LIVE settings reader (short-TTL refreshable) so admin changes to
   // autonomy modes / kill switches / readiness propagate within seconds instead
   // of requiring a process restart. Same synchronous SettingsReader interface.
-  const settings = await createLiveSettingsReader(prisma);
+  // The TTL is env-configurable (LIVE_SETTINGS_TTL_MS) and bounds how stale a
+  // NON-safety-critical read can be; safety-critical kill-switch re-checks call
+  // `settings.refresh()` at the decision point to bypass this cache (SAFE-3).
+  const settings = await createLiveSettingsReader(prisma, { ttlMs: config.liveSettingsTtlMs });
   const caps = createCapRepo(prisma);
 
   return {

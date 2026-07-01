@@ -320,6 +320,13 @@ export async function canSendNow(
   input: AutoSendInput,
   deps: EmailPolicyDeps,
 ): Promise<PolicyDecision> {
+  // SAFETY-CRITICAL forced-fresh read (SAFE-3): bypass the live-settings TTL
+  // cache so a kill-switch / autonomy-mode flip cannot be served stale at this
+  // final send decision point. No-op for the snapshot/fake readers. This runs
+  // BEFORE the base gates so both the base kill-switch checks and the re-check
+  // below observe the latest committed SystemSetting values.
+  await deps.settings.refresh?.();
+
   const base = await canAutoSendOutboundEmailWithCaps(input, deps);
 
   const { settings } = deps;
@@ -398,6 +405,11 @@ export async function canAutoReplyInboundEmail(
   input: AutoReplyInput,
   deps: EmailPolicyDeps,
 ): Promise<PolicyDecision> {
+  // SAFETY-CRITICAL forced-fresh read (SAFE-3): an auto-reply is a REAL send, so
+  // bypass the live-settings TTL cache before evaluating kill switches so a flip
+  // is honored immediately. No-op for the snapshot/fake readers.
+  await deps.settings.refresh?.();
+
   const { settings, caps, config } = deps;
   const now = deps.now ?? new Date();
   const nowIso = input.sendAtIso ?? now.toISOString();
@@ -643,6 +655,11 @@ export async function canBookNow(
   input: AutoCalendarInput,
   deps: CalendarPolicyDeps,
 ): Promise<PolicyDecision> {
+  // SAFETY-CRITICAL forced-fresh read (SAFE-3): bypass the live-settings TTL
+  // cache before this final booking decision so a kill-switch / autonomy-mode
+  // flip is honored immediately. No-op for the snapshot/fake readers.
+  await deps.settings.refresh?.();
+
   const base = await canAutoCreateCalendarEventWithCap(input, deps);
 
   const { settings } = deps;
