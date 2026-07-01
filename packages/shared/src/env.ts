@@ -19,13 +19,22 @@ const intFromString = (def: number) =>
     .pipe(z.number().int().nonnegative())
     .default(def);
 
+/** Localhost DATABASE_URL default, used ONLY in development/test for convenience. */
+const DEV_DATABASE_URL_DEFAULT = 'postgresql://localhost:5432/aiagent';
+
 /** Zod schema validating and defaulting all runtime configuration. */
-export const ConfigSchema = z.object({
+export const ConfigSchema = z
+  .object({
   nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
   logLevel: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
   // Database
-  databaseUrl: z.string().default('postgresql://localhost:5432/aiagent'),
+  // No unconditional default: a missing/empty DATABASE_URL is resolved by the
+  // superRefine below — the localhost default is applied ONLY in development/test,
+  // while production FAILS CLOSED (throws) rather than silently connecting to
+  // localhost (fixes OPS-H2 fail-open). Mirrors the API_AUTH_TOKEN
+  // fail-closed-in-prod posture (there enforced in the API auth hook).
+  databaseUrl: z.string().optional(),
 
   // Temporal
   temporalAddress: z.string().default('localhost:7233'),
@@ -77,6 +86,13 @@ export const ConfigSchema = z.object({
   defaultFromName: z.string().default('Outreach Team'),
   companyAddress: z.string().default('123 Example St, City, ST 00000, USA'),
   unsubscribeBaseUrl: z.string().default('https://example.com/unsubscribe'),
+  // Live-settings cache freshness (ms). The live SystemSetting reader serves
+  // autonomy modes / kill switches from a short-TTL cache; this bounds how stale
+  // a NON-safety-critical read can be. Safety-critical reads (master kill switch
+  // + autonomy modes) use a forced-fresh path that bypasses this cache. Default
+  // 5000ms; lower = faster propagation, more DB reads; 0 = re-query every read.
+  liveSettingsTtlMs: intFromString(5000),
+
   // Secret used to sign/verify one-click unsubscribe tokens. No default: when
   // unset, the unsubscribe endpoint falls back to non-signed (email=) links.
   unsubscribeTokenSecret: z.string().optional(),
@@ -90,7 +106,33 @@ export const ConfigSchema = z.object({
   // Services
   apiPort: intFromString(3001),
   adminPort: intFromString(3000),
-});
+  })
+  // Fail closed in production when DATABASE_URL is missing/empty; supply the
+  // localhost default only in development/test. This must run at parse time so a
+  // bare `node dist/index.js` in prod with no DATABASE_URL fails fast with a
+  // clear config error instead of connecting to the wrong (localhost) database.
+  .superRefine((cfg, ctx) => {
+    const hasDbUrl = typeof cfg.databaseUrl === 'string' && cfg.databaseUrl.trim() !== '';
+    if (cfg.nodeEnv === 'production' && !hasDbUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['databaseUrl'],
+        message:
+          'DATABASE_URL is required in production (NODE_ENV=production) and must not be empty. ' +
+          'Refusing to fall back to the localhost default. Set DATABASE_URL.',
+      });
+    }
+  })
+  .transform((cfg) => {
+    const hasDbUrl = typeof cfg.databaseUrl === 'string' && cfg.databaseUrl.trim() !== '';
+    // In dev/test, retain the localhost default for convenience. In production a
+    // missing value was already rejected by the superRefine above, so this
+    // fallback only ever applies outside production.
+    return {
+      ...cfg,
+      databaseUrl: hasDbUrl ? (cfg.databaseUrl as string) : DEV_DATABASE_URL_DEFAULT,
+    };
+  });
 
 /** Fully parsed, typed application configuration. */
 export type Config = z.infer<typeof ConfigSchema>;
@@ -157,6 +199,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     companyAddress: env.COMPANY_ADDRESS,
     unsubscribeBaseUrl: env.UNSUBSCRIBE_BASE_URL,
     unsubscribeTokenSecret: env.UNSUBSCRIBE_TOKEN_SECRET,
+
+    liveSettingsTtlMs: env.LIVE_SETTINGS_TTL_MS,
 
     apiAuthToken: env.API_AUTH_TOKEN,
 
