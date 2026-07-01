@@ -33,6 +33,14 @@ export interface AppContext {
    * the mock.
    */
   getMockEmail(): Promise<MockEmailProvider>;
+  /**
+   * Readiness check for Temporal connectivity (OPS-M1). Connects the lazy
+   * Temporal client (if not already connected) and issues a gRPC health-service
+   * check. Resolves to `'ok'` when Temporal reports SERVING, throws otherwise.
+   * Separated from the `/health` liveness probe so the cheap probe never touches
+   * Temporal.
+   */
+  pingTemporal(): Promise<'ok'>;
   close(): Promise<void>;
 }
 
@@ -88,6 +96,26 @@ export function createAppContext(): AppContext {
     return deps.email;
   }
 
+  async function pingTemporal(): Promise<'ok'> {
+    // Reuse the same lazily-connected client the API uses to START workflows, so
+    // readiness reflects the real dependency. Ensure the client (and thus the
+    // concrete `connection` in this closure) is initialized, then issue the
+    // standard gRPC health probe on the concrete Connection (the Client's
+    // `connection` field is the narrower `ConnectionLike` and does not expose
+    // `healthService`). A non-SERVING status or connect failure throws (surfaced
+    // by the caller as a 503 with a safe, secret-free detail).
+    await getTemporalClient();
+    if (!connection) throw new Error('Temporal connection unavailable');
+    const res = await connection.healthService.check({
+      service: 'temporal.api.workflowservice.v1.WorkflowService',
+    });
+    // grpc.health.v1: 1 === SERVING.
+    if (res.status !== 1) {
+      throw new Error(`Temporal health status not SERVING (status=${String(res.status)})`);
+    }
+    return 'ok';
+  }
+
   async function close(): Promise<void> {
     if (connection) {
       await connection.close();
@@ -101,6 +129,7 @@ export function createAppContext(): AppContext {
     getTemporalClient,
     getDeps,
     getMockEmail,
+    pingTemporal,
     close,
   };
 }

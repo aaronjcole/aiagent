@@ -104,7 +104,42 @@ export function buildServer(ctx: AppContext): FastifyInstance {
   });
 
   // --- Health ---
+  // Cheap LIVENESS probe: always-200 static response; never touches the DB or
+  // Temporal so it stays a pure "process is up" signal (public / no auth).
   app.get('/health', async () => ({ ok: true }));
+
+  // READINESS probe (OPS-M1): verifies the API's hard dependencies before it is
+  // routed traffic — a DB `SELECT 1` and a Temporal gRPC health check. Public
+  // (exempt from bearer auth, like `/health`), returns 200 when every check is
+  // "ok" and 503 with the failing check(s) otherwise. Never leaks connection
+  // strings or secrets — only coarse "ok"/"error" statuses plus a short,
+  // non-sensitive error label.
+  app.get('/health/ready', async (_req, reply) => {
+    const checks: { db: string; temporal: string } = { db: 'error', temporal: 'error' };
+
+    // DB: cheap round-trip. `$queryRaw` throws if the pool/connection is down.
+    try {
+      await ctx.prisma.$queryRaw`SELECT 1`;
+      checks.db = 'ok';
+    } catch (err) {
+      checks.db = 'error';
+      ctx.logger.warn({ err }, 'readiness: DB check failed');
+    }
+
+    // Temporal: gRPC health check via the lazily-connected client. If Temporal
+    // is unreachable/degraded this throws and the check is "error".
+    try {
+      await ctx.pingTemporal();
+      checks.temporal = 'ok';
+    } catch (err) {
+      checks.temporal = 'error';
+      ctx.logger.warn({ err }, 'readiness: Temporal check failed');
+    }
+
+    const ok = checks.db === 'ok' && checks.temporal === 'ok';
+    reply.status(ok ? 200 : 503).send({ ok, checks });
+    return reply;
+  });
 
   // --- Feature routes ---
   registerProspectRoutes(app, ctx);

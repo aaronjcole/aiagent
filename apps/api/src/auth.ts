@@ -2,9 +2,9 @@
  * HTTP bearer authentication for the API (audit finding SEC-1).
  *
  * A single `onRequest` hook requires `Authorization: Bearer <API_AUTH_TOKEN>` on
- * every route EXCEPT the explicitly public ones (`/health`, and the recipient
- * `GET|POST /unsubscribe` endpoints, which are gated by their own per-recipient
- * SIGNED unsubscribe token rather than the shared API credential).
+ * every route EXCEPT the explicitly public ones (`/health`, `/health/ready`, and
+ * the recipient `GET|POST /unsubscribe` endpoints, which are gated by their own
+ * per-recipient SIGNED unsubscribe token rather than the shared API credential).
  *
  * Config behavior:
  *   - `config.apiAuthToken` SET               → enforce the bearer on protected routes.
@@ -27,7 +27,11 @@ import type { AppContext } from './context.js';
  * the per-recipient signed unsubscribe token verified inside the route handler,
  * so they must not require the shared API credential.
  */
-const PUBLIC_ROUTES: ReadonlySet<string> = new Set(['/health', '/unsubscribe']);
+const PUBLIC_ROUTES: ReadonlySet<string> = new Set([
+  '/health',
+  '/health/ready',
+  '/unsubscribe',
+]);
 
 /**
  * Normalize a request URL to its path (strip query string and any trailing
